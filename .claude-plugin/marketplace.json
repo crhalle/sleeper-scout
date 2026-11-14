@@ -1,0 +1,18 @@
+{
+  "name": "football",
+  "owner": {
+    "name": "Craig Halle"
+  },
+  "metadata": {
+    "description": "Fantasy sports plugins for Claude Code"
+  },
+  "plugins": [
+    {
+      "name": "sleeper-scout",
+      "source": "./plugins/sleeper-scout",
+      "description": "Research and grade Sleeper fantasy leagues (NFL + NBA) and publish a shareable report.",
+      "version": "0.1.0",
+      "category": "productivity"
+    }
+  ]
+}

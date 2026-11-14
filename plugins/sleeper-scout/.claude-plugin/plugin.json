@@ -1,0 +1,10 @@
+{
+  "name": "sleeper-scout",
+  "version": "0.1.0",
+  "description": "Research and grade Sleeper fantasy leagues (NFL + NBA): scoring rules, rosters, injury- and matchup-aware player profiles, and A+ to F roster grades for this week and rest of season.",
+  "author": {
+    "name": "Craig Halle"
+  },
+  "keywords": ["fantasy", "sleeper", "nfl", "nba", "fantasy-football", "grades"],
+  "license": "MIT"
+}
