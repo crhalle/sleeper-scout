@@ -19,7 +19,7 @@ A Claude Code plugin that researches and grades every roster in a [Sleeper](http
 
 Requirements: [Claude Code](https://claude.com/claude-code) and [uv](https://docs.astral.sh/uv/) (`brew install uv`). On first run, uv fetches Python 3.10+ and `polars` automatically.
 
-After this repo is pushed to GitHub, add it as a marketplace:
+Add this repo as a marketplace, then install the plugin:
 
 ```
 /plugin marketplace add crhalle/sleeper-scout
