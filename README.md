@@ -22,7 +22,7 @@ Requirements: [Claude Code](https://claude.com/claude-code) and [uv](https://doc
 After this repo is pushed to GitHub, add it as a marketplace:
 
 ```
-/plugin marketplace add <github-user>/<repo>
+/plugin marketplace add crhalle/sleeper-scout
 /plugin install sleeper-scout@football
 ```
 
