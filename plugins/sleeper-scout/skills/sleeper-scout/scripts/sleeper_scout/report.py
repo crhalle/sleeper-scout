@@ -148,7 +148,14 @@ def _sources(srcs) -> str:
     return " " + " ".join(links)
 
 
-def _player_rows(pid, slot, P, bench=False) -> str:
+def _lock_tag(p, bench, nba) -> str:
+    if not nba:
+        return "locked on bench" if bench else "locked in lineup"
+    n = sum(1 for g in p["week_games"] if g.get("started"))
+    return f"{n} started game{'s' if n != 1 else ''} locked on bench"
+
+
+def _player_rows(pid, slot, P, bench=False, locked=False, nba=False) -> str:
     p = P.get(pid)
     if not p:
         return f'<tr><td>{_e(slot)}</td><td colspan="10" class="muted">empty</td></tr>'
@@ -163,7 +170,8 @@ def _player_rows(pid, slot, P, bench=False) -> str:
     sim_txt = f'{_num(sim["sim_avg"])} <span class="muted small">({sim["split_n"]}g)</span>' if sim else "–"
     row = (f'<tr class="{"bench" if bench else ""}"><td>{_e(slot)}</td>'
            f'<td class="team-cell"><span class="team-name">{_e(p["name"])}</span> '
-           f'<span class="muted small">{_e(p["pos"])} · {_e(p["team"] or "FA")}</span> {_status(p["injury"])}</td>'
+           f'<span class="muted small">{_e(p["pos"])} · {_e(p["team"] or "FA")}</span> {_status(p["injury"])}'
+           + (f' <span class="muted small">· {_lock_tag(p, bench, nba)}</span>' if locked else "") + '</td>'
            f'<td>{opp}</td><td class="num">{_num(sp)}</td><td class="num">{_num(p["own_ppg"])}</td>'
            f'<td class="num">{_mult(mult)}</td><td class="num">{h2h_txt}</td><td class="num">{sim_txt}</td>'
            f'<td class="num"><b>{_num(p["week_pts"])}</b></td><td class="num">{_num(p["ros_pts"], 0)}</td></tr>')
@@ -240,17 +248,32 @@ def _compliance(res) -> str:
             f'<div class="panel notes"><p>{head}</p>{body}</div></section>')
 
 
+def _lock_method(sport) -> str:
+    if sport == "nba":
+        return ("A game that has started keeps each player's status as set in Sleeper. Points from started games "
+                "count only for players in the starting lineup. A bench player's points from those games don't count. "
+                "The best lineup is then picked from the games still to play, since NBA lineups can change day to day.")
+    return ("Once a player's game kicks off, his status is locked as set in Sleeper. A started player stays in his "
+            "lineup slot, and a player who played from the bench stays on the bench with his points not counted. "
+            "Only players whose games haven't started can move into the best lineup.")
+
+
 def _team_card(t, P, rank, sport) -> str:
     g = t["grades"]
     starters = {x["pid"] for x in t["week_lineup"] if x["pid"]}
-    rows = "".join(_player_rows(x["pid"], x["slot"], P) for x in t["week_lineup"])
+    rows = "".join(_player_rows(x["pid"], x["slot"], P, locked=x.get("locked", False)) for x in t["week_lineup"])
     bench_ids = [pid for pid in t["players"] if pid not in starters]
     bench_ids.sort(key=lambda pid: -P[pid]["ros_pts"] if pid in P else 0)
-    bench = "".join(_player_rows(pid, "IR" if pid in t["reserve"] else "BN", P, bench=True) for pid in bench_ids)
+    locked_bench = set(t.get("locked_bench", []))
+    nba = sport == "nba"
+    bench = "".join(_player_rows(pid, "IR" if pid in t["reserve"] else "BN", P, bench=True,
+                                 locked=pid in locked_bench, nba=nba) for pid in bench_ids)
     eff = (t["set_lineup_score"] / t["week_score"]) if t["week_score"] else None
     opp = t.get("opponent")
     opp_line = (f'<p>Matchup: vs <b>{_e(opp["team_name"])}</b>, projected {t["week_score"]:.1f}–{opp["score"]:.1f}, '
                 f'win chance {opp["win_prob"]:.0%}.</p>') if opp else ""
+    banked = (f'<p class="muted small">Includes {t["locked_points"]:.1f} points from games already started by '
+              f'the current starters. The lineup below covers the games still to play.</p>') if t.get("locked_points") else ""
     eff_line = (f'<p class="muted small">Lineup as currently set projects {t["set_lineup_score"]:.1f} '
                 f'({eff:.0%} of the best possible lineup below).</p>') if eff is not None and t["starters"] else ""
     return f"""
@@ -266,7 +289,7 @@ def _team_card(t, P, rank, sport) -> str:
     </span>
   </summary>
   <div class="body">
-    {opp_line}{eff_line}
+    {opp_line}{eff_line}{banked}
     {('<div><b>Out of compliance</b>' + _issue_list(t['compliance']) + '</div>') if t.get('compliance') else ''}
     <div class="scroll"><table>{ROSTER_HEAD}
       <tbody><tr class="group"><th colspan="10">Best lineup this week</th></tr>{rows}
@@ -398,6 +421,7 @@ def render(res: dict) -> str:
     Out/IR ×0). Injured starters from each team's depth chart flag the players whose role they change (a QB out for
     his receivers, an RB1 out for his backup, a CB1 out for the receivers facing that defense). Cited research can override
     the discount, set a return week, or adjust for those role changes.</p></div>
+    <div><b>Games already started</b><p>{_lock_method(sport)}</p></div>
     <div><b>Letter scale</b><p>C+ is league average. Abs moves one step per {ABS_STEP:.1%} above or below the
     benchmark lineup; Curve moves one step per {CURVE_STEP:.1f} standard deviations within this league.</p></div>
   </div>

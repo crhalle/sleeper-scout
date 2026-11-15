@@ -47,13 +47,23 @@ def _slot_order(slots: list[str]) -> list[str]:
     return sorted(slots, key=lambda s: len(SLOT_ELIGIBILITY.get(s, {s})))
 
 
-def optimal_lineup(points: dict, positions: dict, slots: list[str]) -> tuple[float, list[tuple[str, str | None, float]]]:
+def optimal_lineup(points: dict, positions: dict, slots: list[str], fixed: dict | None = None,
+                   exclude: set | None = None) -> tuple[float, list[tuple[str, str | None, float]]]:
     """Greedy fill (restrictive slots first). points: {pid: pts}; positions: {pid: set(pos)}.
-    Returns (total, [(slot, pid, pts)])."""
-    used: set = set()
+
+    fixed: {slot index: pid} players that must stay in that slot (their game has started).
+    exclude: players that can't be moved into the lineup (locked on the bench).
+    Returns (total, [(slot, pid, pts)]) in slot-fill order."""
+    fixed = fixed or {}
+    used: set = set(fixed.values()) | set(exclude or ())
     lineup = []
     ranked = sorted(points.items(), key=lambda kv: -kv[1])
-    for slot in _slot_order(slots):
+    order = sorted(range(len(slots)), key=lambda i: len(SLOT_ELIGIBILITY.get(slots[i], {slots[i]})))
+    for i in order:
+        slot = slots[i]
+        if i in fixed:
+            lineup.append((slot, fixed[i], points.get(fixed[i], 0.0)))
+            continue
         elig = SLOT_ELIGIBILITY.get(slot, {slot})
         pick = next(((pid, p) for pid, p in ranked if pid not in used and positions.get(pid, set()) & elig), None)
         if pick:
@@ -62,6 +72,31 @@ def optimal_lineup(points: dict, positions: dict, slots: list[str]) -> tuple[flo
         else:
             lineup.append((slot, None, 0.0))
     return round(sum(p for _, _, p in lineup), 2), lineup
+
+
+def lineup_with_locks(points: dict, locked_points: dict, locked: set, positions: dict, slots: list[str],
+                      slot_starters: list, sport: str):
+    """Best lineup that respects games already started. Hard rule: a game that has started
+    keeps the player's Sleeper status as set.
+
+    points: {pid: week pts}; locked_points: {pid: pts from games already started};
+    locked: players with at least one game started this week;
+    slot_starters: Sleeper's `starters` aligned with `slots` (None for an empty slot).
+    NFL (one game a week): a started player is locked for the week. Locked starters keep their
+        slot and locked bench players are never moved in.
+    NBA (lineups change daily): only the started games are locked. Their points count for
+        current starters only, and every player's remaining games are optimised freely.
+    Returns (total, lineup, locked_base) where locked_base is the NBA banked points (0 for NFL).
+    """
+    starters = [p for p in slot_starters if p]
+    if sport == "nba":
+        base = round(sum(locked_points.get(p, 0.0) for p in starters if p in points), 2)
+        rest = {p: max(0.0, v - locked_points.get(p, 0.0)) for p, v in points.items()}
+        total, lineup = optimal_lineup(rest, positions, slots)
+        return round(total + base, 2), lineup, base
+    fixed = {i: p for i, p in enumerate(slot_starters[:len(slots)]) if p in locked}
+    total, lineup = optimal_lineup(points, positions, slots, fixed=fixed, exclude=locked)
+    return total, lineup, 0.0
 
 
 def benchmark_lineup(points: dict, positions: dict, slots: list[str], n_teams: int) -> float:

@@ -61,16 +61,16 @@ def _proj_week(sport, season, week, positions, scoring):
     return by_pid, team_games
 
 
-def final_games(sport: str, season: int, week: int) -> set:
-    """Completed games this week. NFL keys are team abbreviations (one game a week);
-    NBA keys are (date, team)."""
+def final_games(sport: str, season: int, week: int, statuses=("complete",)) -> set:
+    """Games this week with one of `statuses` (default: completed). NFL keys are team
+    abbreviations (one game a week); NBA keys are (date, team)."""
     try:
         sched = api.schedule(sport, season)
     except Exception:
         return set()
     out = set()
     for g in sched:
-        if g.get("week") != week or g.get("status") != "complete":
+        if g.get("week") != week or g.get("status") not in statuses:
             continue
         for side in ("home", "away"):
             t = g.get(side)
@@ -136,6 +136,8 @@ def run(league_id: str, adjustments: dict | None = None, history_seasons: int = 
     weeks = list(range(week, last_week + 1)) if in_season else list(range(1, last_week + 1))
     proj = dict(zip(weeks, api.pmap(lambda w: _proj_week(sport, season, w, positions, scoring), weeks)))
     finals = final_games(sport, season, week) if in_season else set()
+    # games that have kicked off (in progress or final): those players' lineup status is locked
+    started = final_games(sport, season, week, ("in_game", "complete")) if in_season else set()
     if finals:
         n_final = len(finals) // 2 if sport == "nfl" else len({d for d, _ in finals})
         unit = "game" if sport == "nfl" else "game day"
@@ -231,15 +233,18 @@ def run(league_id: str, adjustments: dict | None = None, history_seasons: int = 
             # no Sleeper projection: use the team's schedule with our own estimate only
             return [{"date": d, "opp": o, "pts": None} for d, o in sorted(team_games.get(team, []))] if team else []
 
-        def is_final(g):
+        def game_key(g):
             team = g.get("team") or p.get("team")
-            return (team in finals) if sport == "nfl" else ((g.get("date"), team) in finals)
+            return team if sport == "nfl" else (g.get("date"), team)
+
+        def is_final(g):
+            return game_key(g) in finals
 
         week_logs = [x for x in lg_logs if x["season"] == season and x["week"] == week]
         weekly_pts, detail = 0.0, []
         ros_by_week = {}
         for w in weeks:
-            tot, actual = 0.0, 0.0
+            tot, actual, started_v = 0.0, 0.0, 0.0
             for g in games_for(w):
                 v, info = game_value(g, w)
                 if w == weeks[0] and is_final(g):
@@ -251,6 +256,9 @@ def run(league_id: str, adjustments: dict | None = None, history_seasons: int = 
                 else:
                     tot += v
                 if w == weeks[0]:
+                    info["started"] = game_key(g) in started or bool(info.get("final"))
+                    if info["started"] and not info.get("final"):
+                        started_v += v  # in progress: no live stats, so its projection
                     detail.append(info)
             if w == weeks[0]:
                 avail = WEEK_AVAIL.get(status, 1.0) if status else 1.0
@@ -258,6 +266,7 @@ def run(league_id: str, adjustments: dict | None = None, history_seasons: int = 
                     avail = 0.0
                 tot = tot * avail * week_mult + actual
                 weekly_pts = tot
+                locked_pts = started_v * avail * week_mult + actual
             else:
                 avail = ROS_AVAIL.get(status, 1.0) if status else 1.0
                 if return_week is not None:
@@ -280,6 +289,9 @@ def run(league_id: str, adjustments: dict | None = None, history_seasons: int = 
             "own_ppg": round(own, 2) if own is not None else None,
             "sleeper_week": round(sleeper_week, 2) if sleeper_week is not None else None,
             "week_games": detail,
+            # played or playing this week: his starter/bench status can't change any more
+            "locked": any(g["started"] for g in detail),
+            "week_pts_locked": round(locked_pts, 2),
             "week_pts": round(weekly_pts, 2),
             "ros_by_week": ros_by_week,
             "ros_pts": round(sum(ros_by_week.values()), 2),
@@ -305,14 +317,19 @@ def run(league_id: str, adjustments: dict | None = None, history_seasons: int = 
         owner = users.get(r.get("owner_id") or "", {})
         taxi = set(map(str, r.get("taxi") or []))
         reserve = set(map(str, r.get("reserve") or []))
-        starters = [str(x) for x in (r.get("starters") or []) if x and x != "0"]
+        slot_starters = [str(x) if x and str(x) != "0" else None for x in (r.get("starters") or [])]
+        starters = [x for x in slot_starters if x]
         pids = [str(x) for x in (r.get("players") or []) if str(x) in profiles and str(x) not in taxi]
+        # Hard rule: games that have started keep each player's actual Sleeper status (see
+        # grading.lineup_with_locks). The current week of ROS equals the week score.
+        locked = {pid for pid in pids if profiles[pid]["locked"]}
         wk = {pid: profiles[pid]["week_pts"] for pid in pids if pid not in reserve}
-        week_score, week_lineup = grading.optimal_lineup(wk, pos_map, slots)
-        ros_score = 0.0
-        for w in weeks:
-            pts_w = {pid: profiles[pid]["ros_by_week"].get(w, 0) for pid in pids
-                     if not (w == weeks[0] and pid in reserve)}
+        wk_locked = {pid: profiles[pid]["week_pts_locked"] for pid in wk}
+        week_score, week_lineup, locked_base = grading.lineup_with_locks(
+            wk, wk_locked, locked, pos_map, slots, slot_starters, sport)
+        ros_score = week_score if weeks else 0.0
+        for w in weeks[1:]:
+            pts_w = {pid: profiles[pid]["ros_by_week"].get(w, 0) for pid in pids}
             ros_score += grading.optimal_lineup(pts_w, pos_map, slots)[0]
         set_score = round(sum(profiles[s]["week_pts"] for s in starters if s in profiles), 2)
         settings = r.get("settings") or {}
@@ -325,7 +342,10 @@ def run(league_id: str, adjustments: dict | None = None, history_seasons: int = 
             "week_score": week_score,
             "set_lineup_score": set_score,
             "ros_score": round(ros_score, 2),
-            "week_lineup": [{"slot": s, "pid": pid, "pts": pts} for s, pid, pts in week_lineup],
+            "week_lineup": [{"slot": s, "pid": pid, "pts": pts, "locked": sport == "nfl" and pid in locked}
+                            for s, pid, pts in week_lineup],
+            "locked_bench": sorted(locked - set(starters)),
+            "locked_points": locked_base,  # NBA: points already banked by current starters' started games
             "starters": starters,
             "players": pids,
             "reserve": sorted(reserve & set(pids)),
