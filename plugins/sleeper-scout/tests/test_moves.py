@@ -156,3 +156,58 @@ def test_report_never_shows_free_agents_or_moves():
     a["free_agents"] = {}
     assert report.render(a) == with_fa
     assert "WFA" not in with_fa
+
+
+# ------------------------------------------------------------------ projection outliers
+
+def _weeks(pr, vals, games=None):
+    pr["ros_by_week"] = {str(w): v for w, v in zip(WEEKS_LONG, vals)}
+    pr["ros_pts"] = sum(vals)
+    if games:
+        pr["ros_games_by_week"] = {str(w): n for w, n in zip(WEEKS_LONG, games)}
+    return pr
+
+
+WEEKS_LONG = [10, 11, 12, 13, 14, 15]
+
+
+def test_single_week_spike_is_capped_and_input_untouched():
+    k = _weeks(_p("k1", "K", 7), [7, 7, 7, 7, 7, 41.5])
+    capped, flags = moves.robust_weeks(k, 10)
+    assert capped["15"] == 14.0 and flags[0]["week"] == 15 and flags[0]["raw"] == 41.5
+    assert k["ros_by_week"]["15"] == 41.5  # caller's profile isn't mutated
+
+
+def test_current_week_is_never_capped():
+    p = _weeks(_p("r1", "RB", 8), [40, 8, 8, 8, 8, 8])  # week 10 = actual big game
+    capped, flags = moves.robust_weeks(p, 10)
+    assert capped["10"] == 40 and not flags
+
+
+def test_nba_game_count_is_normalised():
+    p = _weeks(_p("g1", "PG", 40), [80, 80, 160, 80, 120, 80], games=[2, 2, 4, 2, 3, 2])
+    assert moves.robust_weeks(p, 10)[1] == []
+
+
+def test_few_weeks_fall_back_to_own_ppg_and_no_reference_means_no_cap():
+    p = _weeks(_p("r1", "RB", 8), [8, 0, 0, 0, 0, 30])
+    capped, flags = moves.robust_weeks(p, 10)
+    assert capped["15"] == 16.0 and flags  # own_ppg 8 x 2
+    p["own_ppg"] = None
+    assert moves.robust_weeks(p, 10) == (p["ros_by_week"], [])
+
+
+def test_outlier_kicker_no_longer_blocks_a_better_waiver_kicker():
+    players = [_p("qa", "QB", 20), _p("ra", "RB", 15), _p("wa", "WR", 14), _p("ka", "K", 7)]
+    teams = [_team(1, ["qa", "ra", "wa", "ka"]), _team(2, [])]
+    fa = [_p("kfa", "K", 9, rostered=False)]
+    a = _analysis(players, teams, free_agents=fa)
+    a["league"]["roster_positions"] = ["QB", "RB", "WR", "K", "BN"]
+    a["weeks"] = WEEKS_LONG
+    a["league"]["last_week"] = 15
+    _weeks(a["players"]["ka"], [7, 7, 7, 7, 7, 41.5])
+    _weeks(a["free_agents"]["kfa"], [9] * 6)
+    res = moves.recommend(a, 1)
+    assert res["waivers"] and res["waivers"][0]["add"]["pid"] == "kfa" and res["waivers"][0]["drop"]["pid"] == "ka"
+    assert res["outliers"][0]["pid"] == "ka" and any("Capped KA" in n for n in res["notes"])
+    assert a["players"]["ka"]["ros_by_week"]["15"] == 41.5

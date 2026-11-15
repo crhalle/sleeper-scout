@@ -4,10 +4,12 @@ Everything here works on a finished analysis.json (no HTTP) and re-scores roster
 grading.team_value, the same function the engine grades teams with. The output is private to
 the owner who asked: it is written to moves.json and never feeds report.html or adjustments.
 
-Values are rest-of-season points (the current week included) from the researched projections.
+Values are rest-of-season points (the current week included) from the researched projections, with
+single-week outliers in later weeks capped (robust_weeks).
 """
 from __future__ import annotations
 
+import statistics
 from itertools import combinations
 
 from .grading import team_value
@@ -25,6 +27,35 @@ MIN_GAIN_PTS = 1.0       # ...and at least this many points
 MARKET_EXP, MARKET_SLACK = 1.5, 0.15
 PER_PARTNER, MAX_TRADES, MAX_WAIVERS, MAX_DROPS = 2, 8, 10, 6
 WAIVERS_PER_POS = 3      # a few alternatives per position, not ten interchangeable TEs
+# A future week's projection may be at most OUTLIER_MULT x the player's typical per-game value. One bad
+# Sleeper projection (e.g. a kicker projected 75 for a single week) otherwise swings every move he's in.
+OUTLIER_MULT = 2.0
+OUTLIER_MIN_WEEKS = 3    # future weeks with a value needed for a median; fewer falls back to own_ppg
+
+
+def robust_weeks(pr: dict, current_week: int) -> tuple[dict, list[dict]]:
+    """(ros_by_week with future-week outliers capped, flags). The current week holds actual points,
+    locks and researched multipliers, so only later weeks are checked. Values are compared per game
+    so an NBA 4-game week isn't mistaken for an outlier against 2-game weeks."""
+    rbw = pr.get("ros_by_week") or {}
+    games = {int(k): v for k, v in (pr.get("ros_games_by_week") or {}).items()}
+    future = {k: v for k, v in rbw.items() if int(k) > current_week}
+    per_game = {k: v / max(1, games.get(int(k), 1)) for k, v in future.items()}
+    vals = [v for v in per_game.values() if v > 0]
+    if len(vals) >= OUTLIER_MIN_WEEKS:
+        ref = statistics.median(vals)
+    else:
+        ref = pr.get("own_ppg") or 0.0
+    if ref <= 0:
+        return rbw, []
+    out, flags = dict(rbw), []
+    for k, v in future.items():
+        cap = round(max(1, games.get(int(k), 1)) * ref * OUTLIER_MULT, 2)
+        if v > cap:
+            out[k] = cap
+            flags.append({"pid": pr.get("pid"), "name": pr.get("name"), "pos": pr.get("pos"),
+                          "week": int(k), "raw": v, "capped": cap})
+    return out, flags
 
 
 class Ctx:
@@ -37,10 +68,17 @@ class Ctx:
         self.weeks = [int(w) for w in analysis.get("weeks") or range(L["week"], L["last_week"] + 1)]
         self.slots = [s for s in L.get("roster_positions") or [] if s not in {"BN", "IR", "TAXI", "RESERVE"}]
         self.rules = L.get("roster_rules") or {}
-        self.P = {**(analysis.get("free_agents") or {}), **analysis["players"]}
+        self.P, self.outliers = {}, []
+        for pid, pr in {**(analysis.get("free_agents") or {}), **analysis["players"]}.items():
+            rbw, flags = robust_weeks(pr, self.week)
+            if flags:  # a capped copy; analysis.json and the graded profiles stay as they are
+                pr = {**pr, "ros_by_week": rbw, "ros_pts": round(sum(rbw.values()), 2)}
+                self.outliers += flags
+            self.P[pid] = pr
         self.pos = {pid: set(pr.get("positions") or [pr.get("pos")]) for pid, pr in self.P.items()}
         self.replacement: dict = {}
-        for pr in (analysis.get("free_agents") or {}).values():
+        for pid in analysis.get("free_agents") or {}:
+            pr = self.P[pid]
             k = pr.get("pos")
             self.replacement[k] = max(self.replacement.get(k, 0.0), pr.get("ros_pts") or 0.0)
 
@@ -314,6 +352,19 @@ def recommend(analysis: dict, roster_id: int, now_rostered: set | None = None) -
     if not analysis.get("free_agents"):
         notes.append("No free-agent data in analysis.json; re-run `report` to add it.")
 
+    drops = drop_candidates(ctx, me, marg)
+    waivers = waiver_claims(ctx, me, marg, base, free_agents, faab)
+    trades = [] if closed else trade_ideas(ctx, me, analysis["teams"], margs, bases)
+    shown = {d["pid"] for d in drops} | set(me["players"])
+    for w in waivers:
+        shown |= {x["pid"] for x in (w["add"], w["drop"]) if x}
+    for t in trades:
+        shown |= {x["pid"] for x in t["give"] + t["get"] + [t["my_drop"], t["their_drop"]] if x}
+    for o in ctx.outliers:
+        if o["pid"] in shown:
+            notes.append(f"Capped {o['name']}'s week {o['week']} projection ({o['raw']:.1f} -> {o['capped']:.1f}): "
+                         "outlier vs his other weeks.")
+
     return {
         "league": {k: L.get(k) for k in ("league_id", "name", "sport", "season", "week", "last_week", "label",
                                          "waiver", "waiver_budget", "trade_deadline")},
@@ -322,8 +373,9 @@ def recommend(analysis: dict, roster_id: int, now_rostered: set | None = None) -
                  "open_spots": _open_spots(ctx, me), "faab_remaining": faab,
                  "waiver_position": (me.get("waiver") or {}).get("position"),
                  "compliance": me.get("compliance") or []},
-        "drops": drop_candidates(ctx, me, marg),
-        "waivers": waiver_claims(ctx, me, marg, base, free_agents, faab),
-        "trades": [] if closed else trade_ideas(ctx, me, analysis["teams"], margs, bases),
+        "drops": drops,
+        "waivers": waivers,
+        "trades": trades,
+        "outliers": ctx.outliers,
         "notes": notes,
     }

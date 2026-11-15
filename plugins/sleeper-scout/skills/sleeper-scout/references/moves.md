@@ -6,6 +6,8 @@ Owner-only recommendations, written to `~/sleeper-scout/<league_id>/moves.json`.
 
 Every move is scored by re-running the engine's lineup scoring (`grading.team_value`) on the changed roster. The value is **rest-of-season points**, counting the current week and later weeks through the last fantasy week, from the researched projections. Gains are the difference from the current roster.
 
+- **Projection outliers**: before anything is scored, each player's later weeks (not the current week) are capped at 2× his typical per-game value (`OUTLIER_MULT`). Typical means the median over his future weeks that have a value, or `own_ppg` when there are fewer than 3. NBA weeks are compared per game. This stops one bad Sleeper projection, such as a kicker projected 75 for a single week, from driving a move. Capped weeks are listed in `outliers`, and a note is added when a capped player is part of a recommendation. Only moves use the capped values: grades and the report don't change.
+
 - **Drops**: `ros_loss` / `week_loss` is how much the roster loses without that player. Players whose NFL game has started this week are never listed, because Sleeper won't drop them.
   - `must_drop`: the roster breaks a size or position limit, and this is the cheapest fix.
   - `ir_instead`: the player's status is IR-eligible in this league and an IR slot is free. Move him to IR rather than dropping him.
@@ -30,6 +32,7 @@ Every move is scored by re-running the engine's lineup scoring (`grading.team_va
   "trades":  [{"partner": {"roster_id": 2, "team_name": "...", "owner": "..."}, "give": [{...}], "get": [{...}],
                "my_gain_ros": 0, "my_gain_week": 0, "their_gain_ros": 0, "their_gain_week": 0,
                "my_drop": {...} | null, "their_drop": {...} | null}],
+  "outliers": [{"pid": "...", "name": "...", "pos": "K", "week": 15, "raw": 41.5, "capped": 14.4}],
   "notes": ["..."]
 }
 ```

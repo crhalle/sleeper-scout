@@ -109,7 +109,7 @@ This advice is **private to the owner**. Never put it in `adjustments.json`, `le
    - **Drops:** `must_drop` players first, then the lowest-value players. Suggest IR instead of dropping when a player is tagged `ir_instead`.
    - **Waiver claims:** add / drop, the ROS gain, the bid range (FAAB) or whether to use waiver priority, and one line on why.
    - **Trades:** up to 3–4 proposals with the partner team, give / get, why it helps you, and a one-sentence pitch for why the other owner gains.
-   - Include the engine's `notes` (trade deadline passed, dynasty value not modelled, locked players).
+   - Include the engine's `notes` (trade deadline passed, dynasty value not modelled, locked players, and any capped projection outlier for a player in a recommended move).
 
 ## Notes
 

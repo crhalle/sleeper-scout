@@ -243,9 +243,10 @@ def run(league_id: str, adjustments: dict | None = None, history_seasons: int = 
 
         week_logs = [x for x in lg_logs if x["season"] == season and x["week"] == week]
         weekly_pts, detail = 0.0, []
-        ros_by_week = {}
+        ros_by_week, ros_games = {}, {}
         for w in weeks:
             tot, actual, started_v = 0.0, 0.0, 0.0
+            ros_games[w] = len(games_for(w))
             for g in games_for(w):
                 v, info = game_value(g, w)
                 if w == weeks[0] and is_final(g):
@@ -295,6 +296,7 @@ def run(league_id: str, adjustments: dict | None = None, history_seasons: int = 
             "week_pts_locked": round(locked_pts, 2),
             "week_pts": round(weekly_pts, 2),
             "ros_by_week": ros_by_week,
+            "ros_games_by_week": ros_games,  # per-game normalisation for moves.robust_weeks
             "ros_pts": round(sum(ros_by_week.values()), 2),
             "teammate_injuries": depth.impacts(pid, poss | {pos}, p.get("team"), team_inj, sport),
             "adjustment": adj or None,

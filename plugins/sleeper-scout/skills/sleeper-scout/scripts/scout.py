@@ -215,6 +215,8 @@ def _print_moves(m: dict) -> None:
         print("(no trade ideas)")
     for n in m["notes"]:
         print(f"! {n}")
+    if m.get("outliers"):
+        print(f"({len(m['outliers'])} future-week projection outlier(s) capped league-wide; see moves.json)")
 
 
 def cmd_moves(a):
