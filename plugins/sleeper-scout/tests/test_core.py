@@ -96,3 +96,83 @@ def test_scheme_context_labels_relative_to_league():
     assert mid["label"] == "average" and abs(mid["league_avg"] - 0.31) < 1e-9
     # falls back to prior season when the team has no current-season data
     assert schemes_nfl.context({(2025, "X"): {"blitz_rate": 0.3}, **{(2025, f"T{i}"): {"blitz_rate": 0.3} for i in range(8)}}, 2026, "X")["blitz_rate"]["season"] == 2025
+
+
+def _pdb():
+    return {
+        "1": {"full_name": "Starting QB", "team": "AAA", "position": "QB", "depth_chart_position": "QB",
+              "depth_chart_order": 1, "injury_status": "Out"},
+        "2": {"full_name": "Wideout", "team": "AAA", "position": "WR", "depth_chart_position": "LWR", "depth_chart_order": 1},
+        "3": {"full_name": "Backup RB", "team": "AAA", "position": "RB", "depth_chart_position": "RB", "depth_chart_order": 2},
+        "4": {"full_name": "Lead RB", "team": "AAA", "position": "RB", "depth_chart_position": "RB",
+              "depth_chart_order": 1, "injury_status": "Questionable"},
+        "5": {"full_name": "Old IR", "team": "AAA", "position": "TE", "depth_chart_position": "TE",
+              "depth_chart_order": 1, "injury_status": "IR"},
+        "6": {"full_name": "Tackle A", "team": "AAA", "position": "OL", "depth_chart_position": "OL", "injury_status": "Out"},
+        "7": {"full_name": "Tackle B", "team": "AAA", "position": "OL", "depth_chart_position": "OL", "injury_status": "Doubtful"},
+        "8": {"full_name": "Corner", "team": "BBB", "position": "CB", "depth_chart_position": "LCB",
+              "depth_chart_order": 1, "injury_status": "Out"},
+        "9": {"full_name": "Backup QB", "team": "AAA", "position": "QB", "depth_chart_position": "QB",
+              "depth_chart_order": 2, "injury_status": "Questionable"},
+    }
+
+
+def test_team_injuries_keeps_starters_and_new_absences_only():
+    from sleeper_scout import depth
+    inj = depth.team_injuries(_pdb(), "nfl", recent={"5": False})
+    names = {e["name"] for e in inj["AAA"]}
+    assert names == {"Starting QB", "Lead RB", "Tackle A", "Tackle B"}  # not the backup QB or the old IR
+    assert "Old IR" in {e["name"] for e in depth.team_injuries(_pdb(), "nfl", recent={"5": True})["AAA"]}
+
+
+def test_qb_injury_ripples_to_receivers_and_rb1_to_backup():
+    from sleeper_scout import depth
+    inj = depth.team_injuries(_pdb(), "nfl")
+    wr = depth.impacts("2", {"WR"}, "AAA", inj, "nfl")
+    assert [(e["name"], e["effect"]) for e in wr] == [("Starting QB", "-")]
+    rb2 = {e["name"]: e["effect"] for e in depth.impacts("3", {"RB"}, "AAA", inj, "nfl")}
+    assert rb2["Lead RB"] == "+" and rb2["Starting QB"] == "-"
+    assert any(e["pos"] == "OL" and e["effect"] == "-" for e in depth.impacts("3", {"RB"}, "AAA", inj, "nfl"))
+    assert all(e["name"] != "Starting QB" for e in depth.impacts("1", {"QB"}, "AAA", inj, "nfl"))  # never himself
+    assert depth.defense_injuries("BBB", inj, "nfl")[0]["helps"] == ["WR"]
+
+
+def test_nba_star_absence_lifts_every_teammate():
+    from sleeper_scout import depth
+    pdb = {"a": {"full_name": "Star", "team": "T", "position": "SF", "depth_chart_position": "SF",
+                 "depth_chart_order": 1, "injury_status": "Out"}}
+    inj = depth.team_injuries(pdb, "nba", team_rank={"a": 1})
+    assert depth.impacts("b", {"C"}, "T", inj, "nba")[0]["effect"] == "+"
+
+
+def _league(**settings):
+    return {"roster_positions": ["QB", "WR", "WR", "FLEX", "BN", "BN"],
+            "settings": {"reserve_slots": 1, "taxi_slots": 0, "reserve_allow_out": 1, **settings}}
+
+
+def test_compliant_roster_has_no_issues():
+    pdb = {"q": {"position": "QB"}, "w1": {"position": "WR"}, "w2": {"position": "WR"},
+           "ir": {"position": "WR", "injury_status": "IR"}}
+    roster = {"players": ["q", "w1", "w2", "ir"], "reserve": ["ir"]}
+    assert league.roster_compliance(_league(position_limit_wr=2), roster, pdb) == []  # IR WR doesn't count
+
+
+def test_compliance_flags_size_position_and_ir_rules():
+    pdb = {f"w{i}": {"position": "WR", "full_name": f"WR {i}"} for i in range(7)}
+    pdb["w5"]["injury_status"] = "Questionable"
+    pdb["w6"]["injury_status"] = "Out"
+    roster = {"players": list(pdb), "reserve": ["w5", "w6"]}
+    issues = league.roster_compliance(_league(position_limit_wr=4), roster, pdb)
+    rules = sorted(i["rule"] for i in issues)
+    assert rules == ["ir_eligibility", "ir_slots", "position_limit"]
+    assert any("WR 5" in i["message"] and "Questionable" in i["message"] for i in issues)  # Out is allowed, Q isn't
+    roster = {"players": list(pdb) + ["x"], "reserve": []}
+    pdb["x"] = {"position": "QB"}
+    assert "roster_size" in {i["rule"] for i in league.roster_compliance(_league(), roster, pdb)}
+
+
+def test_ir_out_toggle_controls_eligibility():
+    pdb = {"a": {"position": "RB", "injury_status": "Out"}}
+    roster = {"players": ["a"], "reserve": ["a"]}
+    assert league.roster_compliance(_league(), roster, pdb) == []
+    assert league.roster_compliance(_league(reserve_allow_out=0), roster, pdb)[0]["rule"] == "ir_eligibility"

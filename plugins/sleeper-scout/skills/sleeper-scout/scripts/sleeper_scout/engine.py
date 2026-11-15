@@ -9,9 +9,9 @@ import datetime as dt
 import statistics
 from collections import defaultdict
 
-from . import api, grading, history
-from .league import (NBA_POS, fetch_positions, last_fantasy_week, player_positions,
-                     relevant_positions, scoring_summary, starting_slots)
+from . import api, depth, grading, history
+from .league import (NBA_POS, compliance_rules, fetch_positions, last_fantasy_week, player_positions,
+                     relevant_positions, roster_compliance, scoring_summary, starting_slots)
 
 # Share of a game's expected points kept, by Sleeper injury status.
 WEEK_AVAIL = {"Questionable": 0.9, "GTD": 0.85, "DTD": 0.85, "Day-To-Day": 0.85, "Doubtful": 0.25,
@@ -145,6 +145,16 @@ def run(league_id: str, adjustments: dict | None = None, history_seasons: int = 
     for r in logs:
         logs_by_pid[r["pid"]].append(r)
 
+    # injured starters by team, from Sleeper's depth chart
+    recent, by_team = {}, defaultdict(list)
+    for pid_, rows in logs_by_pid.items():
+        cur_rows = [x for x in rows if x["season"] == season]
+        recent[pid_] = any(x["week"] >= week - 2 for x in cur_rows)
+        if cur_rows:
+            by_team[cur_rows[-1]["team"]].append((-_avg([x["pts"] for x in cur_rows]), pid_))
+    team_rank = {pid_: i + 1 for rows in by_team.values() for i, (_, pid_) in enumerate(sorted(rows))}
+    team_inj = depth.team_injuries(pdb, sport, recent, team_rank)
+
     rostered = {str(pid) for r in rosters for pid in (r.get("players") or [])}
     universe = set(proj[weeks[0]][0]) | rostered if weeks else rostered
 
@@ -273,6 +283,7 @@ def run(league_id: str, adjustments: dict | None = None, history_seasons: int = 
             "week_pts": round(weekly_pts, 2),
             "ros_by_week": ros_by_week,
             "ros_pts": round(sum(ros_by_week.values()), 2),
+            "teammate_injuries": depth.impacts(pid, poss | {pos}, p.get("team"), team_inj, sport),
             "adjustment": adj or None,
             "rostered": pid in rostered,
         }
@@ -320,6 +331,7 @@ def run(league_id: str, adjustments: dict | None = None, history_seasons: int = 
             "reserve": sorted(reserve & set(pids)),
             "taxi": sorted(taxi),
             "matchup_id": mid_by_roster.get(rid),
+            "compliance": roster_compliance(lg, r, pdb),
         })
 
     wk_curve = grading.curved_grades({t["roster_id"]: t["week_score"] for t in teams})
@@ -356,6 +368,7 @@ def run(league_id: str, adjustments: dict | None = None, history_seasons: int = 
             from . import schemes_nfl
             ctx = schemes_nfl.context(scheme, season, o)
         defenses[o] = {"scheme": feats, "scheme_context": ctx, "similar_this_season": sims,
+                       "injuries": depth.defense_injuries(o, team_inj, sport),
                        "allowed_index": {p: round(history.dvp_index(dvp, season, o, p)[0], 3) for p in style_pos}}
 
     rostered_profiles = {pid: pr for pid, pr in profiles.items() if pr["rostered"]}
@@ -363,7 +376,8 @@ def run(league_id: str, adjustments: dict | None = None, history_seasons: int = 
         "generated_at": dt.datetime.now().isoformat(timespec="minutes"),
         "league": {"league_id": league_id, "name": lg["name"], "sport": sport, "season": season, "week": week,
                    "last_week": last_week, "in_season": in_season, "status": lg.get("status"), **summary,
-                   "scoring_settings": scoring, "roster_positions": lg.get("roster_positions")},
+                   "scoring_settings": scoring, "roster_positions": lg.get("roster_positions"),
+                   "roster_rules": compliance_rules(lg)},
         "benchmarks": {"week": week_bench, "ros": ros_bench},
         "teams": teams,
         "players": rostered_profiles,
@@ -375,8 +389,9 @@ def run(league_id: str, adjustments: dict | None = None, history_seasons: int = 
 
 
 def _research_targets(teams, profiles, sport) -> dict:
-    """Players whose outlook most depends on things the data can't see: injuries, big
-    matchup swings, and each team's most important starters."""
+    """Players whose outlook most depends on things the data can't see: their own injuries,
+    injured starters at positions that change their role, big matchup swings, and each team's
+    most important starters."""
     pri: dict = {}
     why: dict = {}
     for t in teams:
@@ -392,6 +407,14 @@ def _research_targets(teams, profiles, sport) -> dict:
             if pid in key:
                 score += 2
                 reasons.append("key starter")
+            open_games = any(not g.get("final") for g in pr["week_games"])
+            # starters: any injured starter that shifts their role; bench: only an opening likely to happen
+            hits = [e for e in pr.get("teammate_injuries") or []
+                    if open_games and (pid in starters or (e["effect"] == "+" and e["likely_out"]))]
+            if hits:
+                # a starter whose role shifts, or a bench player who may inherit one
+                score += 1.5 if pid in starters else 1
+                reasons += [f"teammate injury: {e['depth']} {e['name']} ({e['status']}, {e['effect']})" for e in hits[:3]]
             if pid in starters and any(abs(g["mult"] - 1) >= 0.08 and not g.get("final") for g in pr["week_games"]):
                 score += 1
                 reasons.append("matchup swing")

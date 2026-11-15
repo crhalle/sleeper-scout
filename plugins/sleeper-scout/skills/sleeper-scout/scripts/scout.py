@@ -64,6 +64,13 @@ def _summary(res: dict) -> str:
         lines.append(f"{t['team_name']} | {t['owner']} | {t['record']} | {t['week_score']:.1f} ({g['week_abs']}/{g['week_curve']}) | "
                      f"{t['ros_score']:.1f} ({g['ros_abs']}/{g['ros_curve']}) | {m}")
     lines.append("")
+    flagged = [t for t in res["teams"] if t.get("compliance")]
+    lines.append(f"## Roster compliance: {len(flagged)} of {len(res['teams'])} rosters break a league rule"
+                 if flagged else "## Roster compliance: every roster complies")
+    for t in flagged:
+        for i in t["compliance"]:
+            lines.append(f"{t['team_name']} | {i['rule']} | {i['message']}")
+    lines.append("")
     lines.append("## Research queue (pid | player | pos | team | this week | why | status)")
     P = res["players"]
     for pid in res["research"]["players"]:

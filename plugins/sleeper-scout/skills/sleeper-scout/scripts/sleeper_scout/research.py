@@ -17,7 +17,7 @@ MIN_BATCHES, MAX_BATCHES = 2, 5
 
 PROFILE_FIELDS = ("name", "pos", "team", "injury", "games_this_season", "ppg_season", "ppg_last4",
                   "ppg_prev_season", "own_ppg", "floor", "ceiling", "sleeper_week", "week_pts", "ros_pts",
-                  "week_games")
+                  "week_games", "teammate_injuries")
 PLAYER_KEYS = ("week_mult", "ros_mult", "return_week", "out_for_season", "status_note", "profile", "sources")
 
 

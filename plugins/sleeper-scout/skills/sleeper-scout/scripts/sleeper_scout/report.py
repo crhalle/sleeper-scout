@@ -76,6 +76,11 @@ tbody tr:last-child td { border-bottom: 0; }
 .up { color: var(--up); } .down { color: var(--down); }
 .status { font-size: .75rem; font-weight: 700; padding: 1px 7px; border-radius: 999px; }
 .st-q { color: var(--g-c); background: var(--g-c-bg); } .st-o { color: var(--g-f); background: var(--g-f-bg); }
+.flag { font-size: .72rem; font-weight: 700; padding: 1px 8px; border-radius: 999px; color: var(--g-f); background: var(--g-f-bg);
+  text-transform: uppercase; letter-spacing: .04em; white-space: nowrap; }
+.issues { margin: 0; padding-left: 18px; display: grid; gap: 4px; }
+.issues .rule { font-weight: 650; }
+.ok { color: var(--g-a); font-weight: 650; }
 .notes { background: var(--surface); border: 1px solid var(--line); border-radius: 10px; padding: 16px 18px; display: grid; gap: 8px; }
 .ladder { display: flex; flex-wrap: wrap; gap: 4px; }
 .method { display: grid; gap: 10px; grid-template-columns: repeat(auto-fit, minmax(260px, 1fr)); }
@@ -170,6 +175,10 @@ def _player_rows(pid, slot, P, bench=False) -> str:
         bits.append("<b>Status:</b> " + _e(adj["status_note"]))
     elif p["injury"] and p["injury"].get("notes"):
         bits.append("<b>Injury:</b> " + _e(p["injury"]["notes"]))
+    if p.get("teammate_injuries"):
+        arrow = {"+": "may help", "-": "may hurt"}
+        bits.append("<b>Teammates:</b> " + _e("; ".join(
+            f'{e["depth"]} {e["name"]} {e["status"]} ({arrow.get(e["effect"], "")})' for e in p["teammate_injuries"])))
     adj_bits = []
     if adj.get("week_mult") not in (None, 1, 1.0):
         adj_bits.append(f"this week ×{float(adj['week_mult']):.2f}")
@@ -194,6 +203,43 @@ ROSTER_HEAD = ('<thead><tr><th>Slot</th><th>Player</th><th>Opp</th><th class="nu
                '<th class="num">Week</th><th class="num">ROS</th></tr></thead>')
 
 
+RULE_LABEL = {"roster_size": "Roster size", "position_limit": "Position limit", "ir_slots": "IR slots",
+              "ir_eligibility": "IR eligibility", "taxi_slots": "Taxi squad"}
+
+
+def _flag(t) -> str:
+    n = len(t.get("compliance") or [])
+    return f'<span class="flag" title="Roster breaks league rules">{n} rule issue{"s" if n != 1 else ""}</span>' if n else ""
+
+
+def _issue_list(issues) -> str:
+    return '<ul class="issues">' + "".join(
+        f'<li><span class="rule">{_e(RULE_LABEL.get(i["rule"], i["rule"]))}:</span> {_e(i["message"])}</li>'
+        for i in issues) + "</ul>"
+
+
+def _compliance(res) -> str:
+    rules = res["league"].get("roster_rules")
+    if not rules:
+        return ""
+    limits = ", ".join(f"{k} {v}" for k, v in sorted(rules["position_limits"].items())) or "none"
+    rule_txt = (f'{rules["roster_spots"]} roster spots · {rules["ir_slots"]} IR slots '
+                f'(eligible: {", ".join(rules["ir_statuses"])})'
+                + (f' · {rules["taxi_slots"]} taxi slots' if rules["taxi_slots"] else "")
+                + f' · position limits: {limits}')
+    flagged = [t for t in res["teams"] if t.get("compliance")]
+    if flagged:
+        body = "".join(f'<div><b><a href="#team-{t["roster_id"]}">{_e(t["team_name"])}</a></b> '
+                       f'<span class="muted small">{_e(t["owner"])}</span>{_issue_list(t["compliance"])}</div>'
+                       for t in flagged)
+        head = f'{len(flagged)} of {len(res["teams"])} rosters break a league rule.'
+    else:
+        body, head = "", '<span class="ok">Every roster complies with the league rules.</span>'
+    return (f'<section class="section"><h2>Roster compliance</h2>'
+            f'<p class="muted small">{_e(rule_txt)}. Position limits count active players only; Sleeper excludes IR and taxi.</p>'
+            f'<div class="panel notes"><p>{head}</p>{body}</div></section>')
+
+
 def _team_card(t, P, rank, sport) -> str:
     g = t["grades"]
     starters = {x["pid"] for x in t["week_lineup"] if x["pid"]}
@@ -213,6 +259,7 @@ def _team_card(t, P, rank, sport) -> str:
     <span class="muted">#{rank}</span>
     <h3>{_e(t['team_name'])}</h3>
     <span class="muted small">{_e(t['owner'])} · {_e(t['record'])}</span>
+    {_flag(t)}
     <span class="summary-grades">
       <span><span class="lbl">Week</span><span class="pair">{_grade(g['week_abs'], 'absolute')}{_grade(g['week_curve'], 'curved')}</span></span>
       <span><span class="lbl">ROS</span><span class="pair">{_grade(g['ros_abs'], 'absolute')}{_grade(g['ros_curve'], 'curved')}</span></span>
@@ -220,6 +267,7 @@ def _team_card(t, P, rank, sport) -> str:
   </summary>
   <div class="body">
     {opp_line}{eff_line}
+    {('<div><b>Out of compliance</b>' + _issue_list(t['compliance']) + '</div>') if t.get('compliance') else ''}
     <div class="scroll"><table>{ROSTER_HEAD}
       <tbody><tr class="group"><th colspan="10">Best lineup this week</th></tr>{rows}
       <tr class="group"><th colspan="10">Bench and reserve</th></tr>{bench}</tbody></table></div>
@@ -238,7 +286,7 @@ def _board(res) -> str:
         rows.append(
             f'<tr><td class="muted">{i}</td>'
             f'<td class="team-cell"><a href="#team-{t["roster_id"]}" class="team-name">{_e(t["team_name"])}</a><br>'
-            f'<span class="muted small">{_e(t["owner"])} · {_e(t["record"])}</span></td>'
+            f'<span class="muted small">{_e(t["owner"])} · {_e(t["record"])}</span> {_flag(t)}</td>'
             f'<td class="num">{t["week_score"]:.1f}</td><td>{_grade(g["week_abs"], "absolute")}</td><td>{_grade(g["week_curve"], "curved")}</td>'
             f'<td class="num">{t["ros_score"]:.0f}</td><td>{_grade(g["ros_abs"], "absolute")}</td><td>{_grade(g["ros_curve"], "curved")}</td>'
             f'<td>{m}</td></tr>')
@@ -278,6 +326,9 @@ def _defenses(res) -> str:
             f'<div class="idx"><span class="muted">Allows vs avg:</span> {idx}</div>'
             + (f'<p class="small muted">{_e(", ".join(sch_txt))}</p>' if sch_txt else "")
             + (f'<p class="small muted">Similar style: {_e(", ".join(d["similar_this_season"][:6]))}</p>' if d["similar_this_season"] else "")
+            + (f'<p class="small"><b>Injured starters:</b> ' + _e("; ".join(
+                f'{e["depth"]} {e["name"]} {e["status"]} (helps {"/".join(e["helps"])})' for e in d["injuries"])) + "</p>"
+               if d.get("injuries") else "")
             + (f'<p class="small">{_e(note.get("note"))}{_sources(note.get("sources"))}</p>' if note.get("note") else "")
             + "</div>")
     if not cards:
@@ -326,6 +377,7 @@ def render(res: dict) -> str:
   <b>Curve</b> ranks the team against the rest of this league.</p>
   {_board(res)}
 </section>
+{_compliance(res)}
 <section class="section">
   <h2>Teams</h2>
   <p class="muted small">Open a team to see its best lineup, bench, and each player's profile. Week = projected
@@ -343,7 +395,9 @@ def render(res: dict) -> str:
     player's history against defenses of a similar style, 20% the player's history against this opponent. Small samples are
     shrunk toward neutral and the result is capped at ×0.80–×1.20.</p></div>
     <div><b>Injuries and research</b><p>Sleeper injury status discounts availability (Questionable ×0.90 this week,
-    Out/IR ×0). Cited research can override that, set a return week, or nudge outlook.</p></div>
+    Out/IR ×0). Injured starters from each team's depth chart flag the players whose role they change (a QB out for
+    his receivers, an RB1 out for his backup, a CB1 out for the receivers facing that defense). Cited research can override
+    the discount, set a return week, or adjust for those role changes.</p></div>
     <div><b>Letter scale</b><p>C+ is league average. Abs moves one step per {ABS_STEP:.1%} above or below the
     benchmark lineup; Curve moves one step per {CURVE_STEP:.1f} standard deviations within this league.</p></div>
   </div>
