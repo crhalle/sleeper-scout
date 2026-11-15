@@ -170,6 +170,10 @@ def _player_rows(pid, slot, P, bench=False) -> str:
         bits.append("<b>Status:</b> " + _e(adj["status_note"]))
     elif p["injury"] and p["injury"].get("notes"):
         bits.append("<b>Injury:</b> " + _e(p["injury"]["notes"]))
+    if p.get("teammate_injuries"):
+        arrow = {"+": "may help", "-": "may hurt"}
+        bits.append("<b>Teammates:</b> " + _e("; ".join(
+            f'{e["depth"]} {e["name"]} {e["status"]} ({arrow.get(e["effect"], "")})' for e in p["teammate_injuries"])))
     adj_bits = []
     if adj.get("week_mult") not in (None, 1, 1.0):
         adj_bits.append(f"this week ×{float(adj['week_mult']):.2f}")
@@ -278,6 +282,9 @@ def _defenses(res) -> str:
             f'<div class="idx"><span class="muted">Allows vs avg:</span> {idx}</div>'
             + (f'<p class="small muted">{_e(", ".join(sch_txt))}</p>' if sch_txt else "")
             + (f'<p class="small muted">Similar style: {_e(", ".join(d["similar_this_season"][:6]))}</p>' if d["similar_this_season"] else "")
+            + (f'<p class="small"><b>Injured starters:</b> ' + _e("; ".join(
+                f'{e["depth"]} {e["name"]} {e["status"]} (helps {"/".join(e["helps"])})' for e in d["injuries"])) + "</p>"
+               if d.get("injuries") else "")
             + (f'<p class="small">{_e(note.get("note"))}{_sources(note.get("sources"))}</p>' if note.get("note") else "")
             + "</div>")
     if not cards:
@@ -343,7 +350,9 @@ def render(res: dict) -> str:
     player's history against defenses of a similar style, 20% the player's history against this opponent. Small samples are
     shrunk toward neutral and the result is capped at ×0.80–×1.20.</p></div>
     <div><b>Injuries and research</b><p>Sleeper injury status discounts availability (Questionable ×0.90 this week,
-    Out/IR ×0). Cited research can override that, set a return week, or nudge outlook.</p></div>
+    Out/IR ×0). Injured starters from each team's depth chart flag the players whose role they change (a QB out for
+    his receivers, an RB1 out for his backup, a CB1 out for the receivers facing that defense). Cited research can override
+    the discount, set a return week, or adjust for those role changes.</p></div>
     <div><b>Letter scale</b><p>C+ is league average. Abs moves one step per {ABS_STEP:.1%} above or below the
     benchmark lineup; Curve moves one step per {CURVE_STEP:.1f} standard deviations within this league.</p></div>
   </div>

@@ -52,6 +52,8 @@ The plugin ships two research subagents. Both run on Sonnet to keep search-heavy
 - **`nfl-researcher`**: practice reports and game designations, injury return timelines, role changes, opposing coverage and missing defenders, weather.
 - **`nba-researcher`**: games missed this week, rest days, minutes limits, rotation changes, opposing defensive scheme.
 
+Injuries are evaluated through the depth chart, not just player by player. The engine reads Sleeper's depth chart for every team, finds injured starters, and flags the players whose role they change: a QB out for his receivers, an RB1 out for his backup, a WR1 out for the other targets, two or more starting linemen out for the QB and backs, and on defense a CB1 or edge rusher out for the opposing offense. The agents confirm each absence and adjust every affected player, with a cited source.
+
 The engine splits the research queue into batches, grouped by real game (NFL) or team (NBA), so each batch covers both sides of a matchup. Small queues (under 12 players) are researched in the main session. Larger ones fan out to 2–5 agents running in parallel. Each agent writes its own result file, and `merge-research` combines them into `adjustments.json`. The merge drops any adjustment that doesn't cite a source.
 
 ## How grades work

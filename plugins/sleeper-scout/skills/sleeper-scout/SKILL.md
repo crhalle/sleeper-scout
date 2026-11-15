@@ -35,7 +35,7 @@ uv run ".../scripts/scout.py" analyze <league_id>
 Output goes to `~/sleeper-scout/<league_id>/analysis.json` (override with `--out DIR`). stdout is a compact summary:
 - the league format and scoring framework (PPR / half / standard, TE premium, superflex, 2QB, IDP, bonuses, NBA category weights, playoff weeks)
 - every team with week and ROS projections and the four grades, plus this week's fantasy matchup and win probability
-- a **research queue**: up to ~45 rostered players whose outlook depends on things the data can't see (injuries, key starters, big matchup swings), with their `pid`
+- a **research queue**: up to ~45 rostered players whose outlook depends on things the data can't see (their own injuries, injured starters at positions that change their role such as a QB out for his receivers, key starters, big matchup swings), with their `pid`
 - opposing defenses this week with their style numbers and the defenses they most resemble
 
 Tell the user the league format you detected in one or two lines before researching, because it affects everything that follows.
@@ -68,11 +68,11 @@ This splits the research queue into batch files under `~/sleeper-scout/<league_i
 uv run ".../scripts/scout.py" merge-research <league_id>
 ```
 
-This writes `adjustments.json`. It validates every entry: unknown players are dropped, multipliers are clamped, and adjustments without a source are discarded (see `references/adjustments.md`). Read its warnings. If it lists high-priority queued players with no result (injured starters, key starters), research those yourself and add them to `adjustments.json`.
+This writes `adjustments.json`. It validates every entry: unknown players are dropped, multipliers are clamped, and adjustments without a source are discarded (see `references/adjustments.md`). Read its warnings. If it lists high-priority queued players with no result (injured starters, teammate injuries, key starters), research those yourself and add them to `adjustments.json`.
 
 ### 4. Add league notes
 
-Add a `league_notes` field to `adjustments.json`: a 3–5 sentence overview covering who is strongest now vs for the playoffs, the biggest injury swings, and notable matchups. Base it on the merged findings and the grade table from step 2.
+Add a `league_notes` field to `adjustments.json`: a 3–5 sentence overview covering who is strongest now vs for the playoffs, the biggest injury swings (including depth-chart ripple effects), and notable matchups. Base it on the merged findings and the grade table from step 2.
 
 ### 5. Build the report
 
