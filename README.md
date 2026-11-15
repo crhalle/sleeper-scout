@@ -45,6 +45,17 @@ The skill also triggers on plain requests such as "grade my Sleeper league".
 
 The first run of a season downloads about 30–60 MB of public data and takes 1–2 minutes. Later runs use the cache in `~/.cache/sleeper-scout` and finish in seconds. Output goes to `~/sleeper-scout/<league_id>/` (`analysis.json`, `adjustments.json`, `report.html`).
 
+## Roster compliance
+
+Every roster is checked against the league's own rules and flagged on the grade board, in its team card, and in a Roster compliance section:
+
+- **Roster size**: more active players than starting plus bench spots
+- **Position limits**: more active players at a position than the league allows. IR and taxi players don't count, matching Sleeper.
+- **IR**: more players on IR than IR slots, or a player on IR whose status the league doesn't allow there, such as a healthy or Questionable player when only IR/Out are eligible
+- **Taxi squad**: more players than taxi slots
+
+Compliance is reported alongside the grades and doesn't change them.
+
 ## Research agents
 
 The plugin ships two research subagents. Both run on Sonnet to keep search-heavy work inexpensive.

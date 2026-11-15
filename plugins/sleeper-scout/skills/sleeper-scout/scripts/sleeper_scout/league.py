@@ -159,3 +159,98 @@ def scoring_summary(lg: dict) -> dict:
         "trade_deadline": int(st.get("trade_deadline") or 0),
         "waiver": {0: "Rolling waivers", 1: "Reverse standings", 2: "FAAB"}.get(int(st.get("waiver_type") or 0), "Waivers"),
     }
+
+
+# ------------------------------------------------------------------ roster compliance
+
+# Statuses Sleeper always lets a player sit on IR, and the league toggles for the rest.
+IR_ALWAYS = {"IR", "PUP", "NFI"}
+IR_TOGGLES = {"Out": "reserve_allow_out", "OUT": "reserve_allow_out", "Doubtful": "reserve_allow_doubtful",
+              "Sus": "reserve_allow_sus", "NA": "reserve_allow_na", "COV": "reserve_allow_cov",
+              "DNR": "reserve_allow_dnr"}
+
+
+def ir_eligible_statuses(lg: dict) -> set[str]:
+    s = lg.get("settings") or {}
+    return IR_ALWAYS | {status for status, key in IR_TOGGLES.items() if s.get(key)}
+
+
+def _shown(statuses: set[str]) -> list[str]:
+    """Sorted statuses with case duplicates removed ("OUT" and "Out" -> "Out")."""
+    by_key: dict[str, str] = {}
+    for st in sorted(statuses):  # uppercase sorts first, so a mixed-case spelling replaces it
+        by_key[st.lower()] = st
+    return sorted(by_key.values())
+
+
+def roster_compliance(lg: dict, roster: dict, pdb: dict) -> list[dict]:
+    """Rule violations for one roster: position limits, roster size, IR and taxi.
+
+    Each issue is {"rule": "position_limit"|"roster_size"|"ir_slots"|"ir_eligibility"|"taxi_slots",
+    "message": str, "pids": [...]}. An empty list means the roster is compliant.
+    """
+    s = lg.get("settings") or {}
+    players = [str(x) for x in roster.get("players") or [] if x and x != "0"]
+    reserve = [str(x) for x in roster.get("reserve") or [] if x and x != "0"]
+    taxi = [str(x) for x in roster.get("taxi") or [] if x and x != "0"]
+    issues: list[dict] = []
+
+    def name(pid):
+        p = pdb.get(pid) or {}
+        return p.get("full_name") or f"{p.get('first_name', '')} {p.get('last_name', '')}".strip() or pid
+
+    # overall roster size: starters + bench; IR and taxi have their own slot counts
+    active = [pid for pid in players if pid not in set(reserve) | set(taxi)]
+    size = sum(1 for slot in lg.get("roster_positions") or [] if slot not in {"IR", "TAXI"})
+    if size and len(active) > size:
+        issues.append({"rule": "roster_size", "pids": [],
+                       "message": f"{len(active)} active players for {size} roster spots (over by {len(active) - size})."})
+
+    reserve_slots = int(s.get("reserve_slots") or 0)
+    if len(reserve) > reserve_slots:
+        issues.append({"rule": "ir_slots", "pids": reserve,
+                       "message": f"{len(reserve)} players on IR but the league allows {reserve_slots}."})
+    allowed = ir_eligible_statuses(lg)
+    for pid in reserve:
+        status = (pdb.get(pid) or {}).get("injury_status")
+        if status not in allowed:
+            shown = status or "healthy (no injury designation)"
+            issues.append({"rule": "ir_eligibility", "pids": [pid],
+                           "message": f"{name(pid)} is on IR but is {shown}, which this league doesn't allow on IR "
+                                      f"(allowed: {', '.join(_shown(allowed))})."})
+
+    taxi_slots = int(s.get("taxi_slots") or 0)
+    if len(taxi) > taxi_slots:
+        issues.append({"rule": "taxi_slots", "pids": taxi,
+                       "message": f"{len(taxi)} players on the taxi squad but the league allows {taxi_slots}."})
+
+    # position limits count active players only; Sleeper excludes IR and taxi
+    # (support.sleeper.com/en/articles/5379935-how-do-i-set-positional-limits)
+    by_pos: dict[str, list[str]] = {}
+    for pid in active:
+        pos = (pdb.get(pid) or {}).get("position")
+        if pos:
+            by_pos.setdefault(pos.upper(), []).append(pid)
+    for key, limit in s.items():
+        if not key.startswith("position_limit_") or not limit:
+            continue
+        pos = key[len("position_limit_"):].upper()
+        have = by_pos.get(pos, [])
+        if len(have) > int(limit):
+            issues.append({"rule": "position_limit", "pids": have,
+                           "message": f"{len(have)} active {pos}s; the league limit is {int(limit)} "
+                                      f"({', '.join(name(p) for p in have)}). Sleeper locks the lineup until it's fixed."})
+    return issues
+
+
+def compliance_rules(lg: dict) -> dict:
+    """The league's roster rules, for display."""
+    s = lg.get("settings") or {}
+    return {
+        "roster_spots": sum(1 for slot in lg.get("roster_positions") or [] if slot not in {"IR", "TAXI"}),
+        "ir_slots": int(s.get("reserve_slots") or 0),
+        "ir_statuses": _shown(ir_eligible_statuses(lg)),
+        "taxi_slots": int(s.get("taxi_slots") or 0),
+        "position_limits": {k[len("position_limit_"):].upper(): int(v) for k, v in s.items()
+                            if k.startswith("position_limit_") and v},
+    }

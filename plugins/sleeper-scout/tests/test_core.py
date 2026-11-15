@@ -143,3 +143,36 @@ def test_nba_star_absence_lifts_every_teammate():
                  "depth_chart_order": 1, "injury_status": "Out"}}
     inj = depth.team_injuries(pdb, "nba", team_rank={"a": 1})
     assert depth.impacts("b", {"C"}, "T", inj, "nba")[0]["effect"] == "+"
+
+
+def _league(**settings):
+    return {"roster_positions": ["QB", "WR", "WR", "FLEX", "BN", "BN"],
+            "settings": {"reserve_slots": 1, "taxi_slots": 0, "reserve_allow_out": 1, **settings}}
+
+
+def test_compliant_roster_has_no_issues():
+    pdb = {"q": {"position": "QB"}, "w1": {"position": "WR"}, "w2": {"position": "WR"},
+           "ir": {"position": "WR", "injury_status": "IR"}}
+    roster = {"players": ["q", "w1", "w2", "ir"], "reserve": ["ir"]}
+    assert league.roster_compliance(_league(position_limit_wr=2), roster, pdb) == []  # IR WR doesn't count
+
+
+def test_compliance_flags_size_position_and_ir_rules():
+    pdb = {f"w{i}": {"position": "WR", "full_name": f"WR {i}"} for i in range(7)}
+    pdb["w5"]["injury_status"] = "Questionable"
+    pdb["w6"]["injury_status"] = "Out"
+    roster = {"players": list(pdb), "reserve": ["w5", "w6"]}
+    issues = league.roster_compliance(_league(position_limit_wr=4), roster, pdb)
+    rules = sorted(i["rule"] for i in issues)
+    assert rules == ["ir_eligibility", "ir_slots", "position_limit"]
+    assert any("WR 5" in i["message"] and "Questionable" in i["message"] for i in issues)  # Out is allowed, Q isn't
+    roster = {"players": list(pdb) + ["x"], "reserve": []}
+    pdb["x"] = {"position": "QB"}
+    assert "roster_size" in {i["rule"] for i in league.roster_compliance(_league(), roster, pdb)}
+
+
+def test_ir_out_toggle_controls_eligibility():
+    pdb = {"a": {"position": "RB", "injury_status": "Out"}}
+    roster = {"players": ["a"], "reserve": ["a"]}
+    assert league.roster_compliance(_league(), roster, pdb) == []
+    assert league.roster_compliance(_league(reserve_allow_out=0), roster, pdb)[0]["rule"] == "ir_eligibility"

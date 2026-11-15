@@ -10,8 +10,8 @@ import statistics
 from collections import defaultdict
 
 from . import api, depth, grading, history
-from .league import (NBA_POS, fetch_positions, last_fantasy_week, player_positions,
-                     relevant_positions, scoring_summary, starting_slots)
+from .league import (NBA_POS, compliance_rules, fetch_positions, last_fantasy_week, player_positions,
+                     relevant_positions, roster_compliance, scoring_summary, starting_slots)
 
 # Share of a game's expected points kept, by Sleeper injury status.
 WEEK_AVAIL = {"Questionable": 0.9, "GTD": 0.85, "DTD": 0.85, "Day-To-Day": 0.85, "Doubtful": 0.25,
@@ -331,6 +331,7 @@ def run(league_id: str, adjustments: dict | None = None, history_seasons: int = 
             "reserve": sorted(reserve & set(pids)),
             "taxi": sorted(taxi),
             "matchup_id": mid_by_roster.get(rid),
+            "compliance": roster_compliance(lg, r, pdb),
         })
 
     wk_curve = grading.curved_grades({t["roster_id"]: t["week_score"] for t in teams})
@@ -375,7 +376,8 @@ def run(league_id: str, adjustments: dict | None = None, history_seasons: int = 
         "generated_at": dt.datetime.now().isoformat(timespec="minutes"),
         "league": {"league_id": league_id, "name": lg["name"], "sport": sport, "season": season, "week": week,
                    "last_week": last_week, "in_season": in_season, "status": lg.get("status"), **summary,
-                   "scoring_settings": scoring, "roster_positions": lg.get("roster_positions")},
+                   "scoring_settings": scoring, "roster_positions": lg.get("roster_positions"),
+                   "roster_rules": compliance_rules(lg)},
         "benchmarks": {"week": week_bench, "ros": ros_bench},
         "teams": teams,
         "players": rostered_profiles,
