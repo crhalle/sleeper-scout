@@ -244,7 +244,7 @@ def run(league_id: str, adjustments: dict | None = None, history_seasons: int = 
         weekly_pts, detail = 0.0, []
         ros_by_week = {}
         for w in weeks:
-            tot, actual = 0.0, 0.0
+            tot, actual, started_v = 0.0, 0.0, 0.0
             for g in games_for(w):
                 v, info = game_value(g, w)
                 if w == weeks[0] and is_final(g):
@@ -257,6 +257,8 @@ def run(league_id: str, adjustments: dict | None = None, history_seasons: int = 
                     tot += v
                 if w == weeks[0]:
                     info["started"] = game_key(g) in started or bool(info.get("final"))
+                    if info["started"] and not info.get("final"):
+                        started_v += v  # in progress: no live stats, so its projection
                     detail.append(info)
             if w == weeks[0]:
                 avail = WEEK_AVAIL.get(status, 1.0) if status else 1.0
@@ -264,6 +266,7 @@ def run(league_id: str, adjustments: dict | None = None, history_seasons: int = 
                     avail = 0.0
                 tot = tot * avail * week_mult + actual
                 weekly_pts = tot
+                locked_pts = started_v * avail * week_mult + actual
             else:
                 avail = ROS_AVAIL.get(status, 1.0) if status else 1.0
                 if return_week is not None:
@@ -288,6 +291,7 @@ def run(league_id: str, adjustments: dict | None = None, history_seasons: int = 
             "week_games": detail,
             # played or playing this week: his starter/bench status can't change any more
             "locked": any(g["started"] for g in detail),
+            "week_pts_locked": round(locked_pts, 2),
             "week_pts": round(weekly_pts, 2),
             "ros_by_week": ros_by_week,
             "ros_pts": round(sum(ros_by_week.values()), 2),
@@ -316,19 +320,17 @@ def run(league_id: str, adjustments: dict | None = None, history_seasons: int = 
         slot_starters = [str(x) if x and str(x) != "0" else None for x in (r.get("starters") or [])]
         starters = [x for x in slot_starters if x]
         pids = [str(x) for x in (r.get("players") or []) if str(x) in profiles and str(x) not in taxi]
-        # Hard rule: a player whose game has started keeps his actual status this week. A locked
-        # starter stays in his slot; a locked bench player stays on the bench (his points don't count).
+        # Hard rule: games that have started keep each player's actual Sleeper status (see
+        # grading.lineup_with_locks). The current week of ROS equals the week score.
         locked = {pid for pid in pids if profiles[pid]["locked"]}
-        fixed = {i: pid for i, pid in enumerate(slot_starters[:len(slots)]) if pid in locked}
         wk = {pid: profiles[pid]["week_pts"] for pid in pids if pid not in reserve}
-        week_score, week_lineup = grading.optimal_lineup(wk, pos_map, slots, fixed=fixed, exclude=locked)
-        ros_score = 0.0
-        for w in weeks:
-            now = w == weeks[0]
-            pts_w = {pid: profiles[pid]["ros_by_week"].get(w, 0) for pid in pids
-                     if not (now and pid in reserve)}
-            ros_score += grading.optimal_lineup(pts_w, pos_map, slots, fixed=fixed if now else None,
-                                                exclude=locked if now else None)[0]
+        wk_locked = {pid: profiles[pid]["week_pts_locked"] for pid in wk}
+        week_score, week_lineup, locked_base = grading.lineup_with_locks(
+            wk, wk_locked, locked, pos_map, slots, slot_starters, sport)
+        ros_score = week_score if weeks else 0.0
+        for w in weeks[1:]:
+            pts_w = {pid: profiles[pid]["ros_by_week"].get(w, 0) for pid in pids}
+            ros_score += grading.optimal_lineup(pts_w, pos_map, slots)[0]
         set_score = round(sum(profiles[s]["week_pts"] for s in starters if s in profiles), 2)
         settings = r.get("settings") or {}
         teams.append({
@@ -340,8 +342,10 @@ def run(league_id: str, adjustments: dict | None = None, history_seasons: int = 
             "week_score": week_score,
             "set_lineup_score": set_score,
             "ros_score": round(ros_score, 2),
-            "week_lineup": [{"slot": s, "pid": pid, "pts": pts, "locked": pid in locked} for s, pid, pts in week_lineup],
+            "week_lineup": [{"slot": s, "pid": pid, "pts": pts, "locked": sport == "nfl" and pid in locked}
+                            for s, pid, pts in week_lineup],
             "locked_bench": sorted(locked - set(starters)),
+            "locked_points": locked_base,  # NBA: points already banked by current starters' started games
             "starters": starters,
             "players": pids,
             "reserve": sorted(reserve & set(pids)),

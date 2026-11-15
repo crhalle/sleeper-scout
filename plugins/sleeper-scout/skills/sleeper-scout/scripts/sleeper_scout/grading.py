@@ -74,6 +74,31 @@ def optimal_lineup(points: dict, positions: dict, slots: list[str], fixed: dict 
     return round(sum(p for _, _, p in lineup), 2), lineup
 
 
+def lineup_with_locks(points: dict, locked_points: dict, locked: set, positions: dict, slots: list[str],
+                      slot_starters: list, sport: str):
+    """Best lineup that respects games already started. Hard rule: a game that has started
+    keeps the player's Sleeper status as set.
+
+    points: {pid: week pts}; locked_points: {pid: pts from games already started};
+    locked: players with at least one game started this week;
+    slot_starters: Sleeper's `starters` aligned with `slots` (None for an empty slot).
+    NFL (one game a week): a started player is locked for the week. Locked starters keep their
+        slot and locked bench players are never moved in.
+    NBA (lineups change daily): only the started games are locked. Their points count for
+        current starters only, and every player's remaining games are optimised freely.
+    Returns (total, lineup, locked_base) where locked_base is the NBA banked points (0 for NFL).
+    """
+    starters = [p for p in slot_starters if p]
+    if sport == "nba":
+        base = round(sum(locked_points.get(p, 0.0) for p in starters if p in points), 2)
+        rest = {p: max(0.0, v - locked_points.get(p, 0.0)) for p, v in points.items()}
+        total, lineup = optimal_lineup(rest, positions, slots)
+        return round(total + base, 2), lineup, base
+    fixed = {i: p for i, p in enumerate(slot_starters[:len(slots)]) if p in locked}
+    total, lineup = optimal_lineup(points, positions, slots, fixed=fixed, exclude=locked)
+    return total, lineup, 0.0
+
+
 def benchmark_lineup(points: dict, positions: dict, slots: list[str], n_teams: int) -> float:
     """Average starting lineup if the top players were distributed evenly across n_teams."""
     used: set = set()

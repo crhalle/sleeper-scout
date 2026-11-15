@@ -188,3 +188,20 @@ def test_started_players_keep_their_lineup_status():
     # a locked bench player is never pulled in, even into an open slot
     total, lineup = grading.optimal_lineup(pts, pos, slots, exclude={"rbB"})
     assert {s: p for s, p, _ in lineup}["RB"] == "rbC"
+
+
+def test_lineup_with_locks_nfl_locks_the_whole_week():
+    pts = {"a": 2.0, "b": 25.0, "c": 10.0}
+    pos = {k: {"RB"} for k in pts}
+    # a started (scored 2) and b played from the bench (25): only c is still free, but a holds the slot
+    total, lineup, base = grading.lineup_with_locks(pts, {"a": 2.0, "b": 25.0, "c": 0.0}, {"a", "b"}, pos, ["RB"], ["a"], "nfl")
+    assert lineup == [("RB", "a", 2.0)] and total == 2.0 and base == 0.0
+
+
+def test_lineup_with_locks_nba_locks_only_started_games():
+    pts = {"start": 40.0, "bench": 60.0}           # week totals
+    done = {"start": 20.0, "bench": 30.0}          # from games already started
+    pos = {k: {"PG"} for k in pts}
+    total, lineup, base = grading.lineup_with_locks(pts, done, {"start", "bench"}, pos, ["PG"], ["start"], "nba")
+    # starter banks 20; the bench player's 30 doesn't count, but his remaining 30 can be started
+    assert base == 20.0 and lineup == [("PG", "bench", 30.0)] and total == 50.0
