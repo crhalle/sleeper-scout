@@ -23,6 +23,7 @@ ROS_AVAIL = {"Questionable": 0.98, "GTD": 0.98, "DTD": 0.98, "Day-To-Day": 0.98,
 W_DVP, W_SPLIT, W_H2H = 0.5, 0.3, 0.2   # matchup multiplier weights
 MULT_MIN, MULT_MAX = 0.80, 1.20
 ADJ_MIN, ADJ_MAX = 0.0, 1.5
+FA_PER_POS = 15  # best unrostered players kept per position for roster-move recommendations
 
 
 def _clip(x, lo, hi):
@@ -323,20 +324,19 @@ def run(league_id: str, adjustments: dict | None = None, history_seasons: int = 
         # Hard rule: games that have started keep each player's actual Sleeper status (see
         # grading.lineup_with_locks). The current week of ROS equals the week score.
         locked = {pid for pid in pids if profiles[pid]["locked"]}
-        wk = {pid: profiles[pid]["week_pts"] for pid in pids if pid not in reserve}
-        wk_locked = {pid: profiles[pid]["week_pts_locked"] for pid in wk}
-        week_score, week_lineup, locked_base = grading.lineup_with_locks(
-            wk, wk_locked, locked, pos_map, slots, slot_starters, sport)
-        ros_score = week_score if weeks else 0.0
-        for w in weeks[1:]:
-            pts_w = {pid: profiles[pid]["ros_by_week"].get(w, 0) for pid in pids}
-            ros_score += grading.optimal_lineup(pts_w, pos_map, slots)[0]
+        week_score, ros_score, week_lineup, locked_base = grading.team_value(
+            pids, reserve, profiles, pos_map, slots, slot_starters, weeks, sport)
         set_score = round(sum(profiles[s]["week_pts"] for s in starters if s in profiles), 2)
         settings = r.get("settings") or {}
         teams.append({
             "roster_id": rid,
             "team_name": (owner.get("metadata") or {}).get("team_name") or owner.get("display_name") or f"Team {rid}",
             "owner": owner.get("display_name") or "(open)",
+            "owner_id": r.get("owner_id"),
+            "co_owners": r.get("co_owners") or [],
+            "slot_starters": slot_starters,
+            "waiver": {"position": settings.get("waiver_position"),
+                       "budget_used": int(settings.get("waiver_budget_used") or 0)},
             "record": f"{settings.get('wins', 0)}-{settings.get('losses', 0)}" + (f"-{settings['ties']}" if settings.get("ties") else ""),
             "points_for": round((settings.get("fpts") or 0) + (settings.get("fpts_decimal") or 0) / 100, 2),
             "week_score": week_score,
@@ -392,6 +392,13 @@ def run(league_id: str, adjustments: dict | None = None, history_seasons: int = 
                        "allowed_index": {p: round(history.dvp_index(dvp, season, o, p)[0], 3) for p in style_pos}}
 
     rostered_profiles = {pid: pr for pid, pr in profiles.items() if pr["rostered"]}
+    # unrostered players, for the owner-only roster-move step (moves.py). The report never reads this.
+    fa_by_pos = defaultdict(list)
+    for pid, pr in profiles.items():
+        if not pr["rostered"] and pr["ros_pts"] > 0:
+            fa_by_pos[pr["pos"]].append(pr)
+    free_agents = {pr["pid"]: pr for rows in fa_by_pos.values()
+                   for pr in sorted(rows, key=lambda x: -x["ros_pts"])[:FA_PER_POS]}
     return {
         "generated_at": dt.datetime.now().isoformat(timespec="minutes"),
         "league": {"league_id": league_id, "name": lg["name"], "sport": sport, "season": season, "week": week,
@@ -401,6 +408,8 @@ def run(league_id: str, adjustments: dict | None = None, history_seasons: int = 
         "benchmarks": {"week": week_bench, "ros": ros_bench},
         "teams": teams,
         "players": rostered_profiles,
+        "free_agents": free_agents,
+        "weeks": weeks,
         "defenses": defenses,
         "research": research,
         "warnings": warnings,

@@ -43,7 +43,7 @@ To try it from a local checkout:
 
 The skill also triggers on plain requests such as "grade my Sleeper league".
 
-The first run of a season downloads about 30–60 MB of public data and takes 1–2 minutes. Later runs use the cache in `~/.cache/sleeper-scout` and finish in seconds. Output goes to `~/sleeper-scout/<league_id>/` (`analysis.json`, `adjustments.json`, `report.html`).
+The first run of a season downloads about 30–60 MB of public data and takes 1–2 minutes. Later runs use the cache in `~/.cache/sleeper-scout` and finish in seconds. Output goes to `~/sleeper-scout/<league_id>/` (`analysis.json`, `adjustments.json`, `report.html`, and `moves.json` if you ask for roster moves).
 
 ## Roster compliance
 
@@ -55,6 +55,22 @@ Every roster is checked against the league's own rules and flagged on the grade 
 - **Taxi squad**: more players than taxi slots
 
 Compliance is reported alongside the grades and doesn't change them.
+
+## Roster moves (private)
+
+After the weekly analysis, ask for recommendations for your own team, or run:
+
+```
+/sleeper-scout:moves                         # Claude asks which team is yours
+/sleeper-scout:moves 1386037431169470464 myusername
+```
+
+You get:
+- **Drops**: your lowest-value players, plus forced drops when the roster breaks a rule, and IR suggestions where the player is eligible.
+- **Waiver claims**: add/drop pairs with the rest-of-season gain and a FAAB bid range in FAAB leagues.
+- **Trades**: 1-for-1 and 2-for-1 ideas with every team that help you, don't cost the other owner, and pass a market-value fairness check.
+
+Claude news-checks the top targets before recommending them. The advice stays in your chat session and in `~/sleeper-scout/<league_id>/moves.json`. It is never added to the shared report. It is only available once that week's analysis is finished (analyze → research → report).
 
 ## Research agents
 
@@ -81,7 +97,7 @@ The plugin only reads public endpoints and never logs in to or writes to Sleeper
 - [Sleeper API](https://docs.sleeper.com) for leagues, rosters, users, injuries, game logs, and projections.
 - [nflverse](https://github.com/nflverse/nflverse-data) for NFL play-by-play, FTN charting, and participation data.
 
-Reports include league members' Sleeper display names and team names. Published pages are private until you share the link.
+Reports include league members' Sleeper display names and team names. Published pages are private until you share the link. Roster-move recommendations are never published.
 
 ## Develop
 

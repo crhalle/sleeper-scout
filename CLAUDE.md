@@ -20,6 +20,7 @@ uv run $S analyze <league_id> [--out DIR] [--seasons 3]
 uv run $S plan-research  <league_id> [--batches N]   # research/batch-<n>.json (+ inline|parallel mode)
 uv run $S merge-research <league_id>                 # research/result-*.json -> adjustments.json
 uv run $S report  <league_id> --adjustments FILE      # writes report.html
+uv run $S moves   <league_id> --roster ID | --owner USERNAME   # owner-only drops/waivers/trades -> moves.json
 
 # run one research agent headless (prompt must come before the variadic --allowedTools)
 claude -p "Launch one Agent, subagent_type 'sleeper-scout:nfl-researcher', prompt 'Batch file: <path>'" \
@@ -39,7 +40,7 @@ Sample in-season NFL league for live testing: `1386037431169470464` (public Slee
 
 The work is split between **deterministic Python** and **Claude-driven steps**:
 
-- `commands/scout.md` is a thin wrapper that loads the skill.
+- `commands/scout.md` is a thin wrapper that loads the skill. `commands/moves.md` jumps to the skill's step 8 (roster moves).
 - `skills/sleeper-scout/SKILL.md` defines the workflow. The main session finds the league and runs `analyze`, then `plan-research`. It either fans out one research agent per batch or researches inline. It then runs `merge-research`, adds `league_notes`, runs `report`, and publishes `report.html` as an Artifact.
 - `agents/{nfl,nba}-researcher.md` are the research subagents (`model: sonnet`, tools WebSearch/WebFetch/Read/Write). They are the **single source of truth for each sport's research playbook**. The inline fallback also reads them, so edit the playbook there. Each agent reads one `research/batch-<n>.json` and writes `research/result-<n>.json`, and must reply in one line.
 - Subagents can't spawn subagents, and they can't see the skill's base directory, so every path they need is passed through the batch file (`result_path`).
@@ -55,6 +56,7 @@ Python package `scripts/sleeper_scout/`:
 - `engine.py`: `run(league_id, adjustments)` ties everything together. It is deterministic for a given cache state, so `analyze` and `report` both call it, and `report` simply passes adjustments.
 - `research.py`: `plan_batches` (grouped by game, `MIN_PARALLEL`=12, 2–5 batches) and `merge` (drops unknown pids, clamps to the engine's `ADJ_MIN`/`ADJ_MAX`, discards unsourced adjustments). Covered by `tests/test_research.py`.
 - `grading.py`: greedy optimal lineup, benchmark lineup, and the 13-step letter ladder (`ABS_STEP`, `CURVE_STEP`). The unit tests cover these pure functions.
+- `moves.py`: owner-only roster moves (drops, waiver claims, 1-for-1 / 2-for-1 trades) computed from `analysis.json` alone. It re-scores rosters with `grading.team_value`, the same helper the engine grades teams with. Trades need the partner not to lose more than `TRADE_TOL`, plus a market check (points over replacement ^ `MARKET_EXP`). Freed roster spots aren't filled from waivers. `scout.py moves_gate` refuses to run until `report` has run with merged research for Sleeper's current week. **Privacy rule:** moves output goes only to chat and `moves.json`, never into `report.html`, `adjustments.json`, `league_notes`, or an Artifact. The engine exposes the needed inputs (`free_agents` top `FA_PER_POS` per position, `weeks`, and each team's `owner_id`/`co_owners`/`slot_starters`/`waiver`), and `report.py` never reads them.
 - `report.py`: renders one self-contained HTML body fragment, with no external JS and light/dark tokens, so it can be published as an Artifact unchanged.
 
 ## Sleeper API facts this code relies on

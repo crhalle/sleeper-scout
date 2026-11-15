@@ -10,8 +10,8 @@
     {
       "name": "sleeper-scout",
       "source": "./plugins/sleeper-scout",
-      "description": "Research and grade Sleeper fantasy leagues (NFL + NBA) and publish a shareable report.",
-      "version": "0.1.0",
+      "description": "Research and grade Sleeper fantasy leagues (NFL + NBA), publish a shareable report, and get private roster-move advice.",
+      "version": "0.2.0",
       "category": "productivity"
     }
   ]

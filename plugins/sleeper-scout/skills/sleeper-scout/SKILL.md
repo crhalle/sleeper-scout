@@ -1,6 +1,6 @@
 ---
 name: sleeper-scout
-description: Research and grade a Sleeper fantasy league (NFL or NBA). Finds the league from a Sleeper username or league ID, reads its scoring rules (PPR, superflex, TE premium, NBA points weights), pulls every roster, builds player profiles from injuries, matchups against similar defensive schemes and head-to-head history, then grades every team A+ to F for this week and rest of season and publishes a shareable report. Use when the user asks to analyze, scout, rank, grade or power-rank their Sleeper league or rosters.
+description: Research and grade a Sleeper fantasy league (NFL or NBA). Finds the league from a Sleeper username or league ID, reads its scoring rules (PPR, superflex, TE premium, NBA points weights), pulls every roster, builds player profiles from injuries, matchups against similar defensive schemes and head-to-head history, then grades every team A+ to F for this week and rest of season and publishes a shareable report. Use when the user asks to analyze, scout, rank, grade or power-rank their Sleeper league or rosters, or (after that analysis) asks for drop, waiver-claim or trade recommendations for their own team.
 argument-hint: "[sleeper username or league ID]"
 ---
 
@@ -90,6 +90,26 @@ The user wants a shareable page. If your Artifact tool is available, publish `re
 ### 7. Summarize in chat
 
 Keep it short. Give the format detected, the top and bottom teams with their grades, any roster flagged out of compliance and why, the biggest research-driven changes, and the link or path. Don't paste the full report.
+
+End with one line offering private roster-move advice: "Want drop, waiver and trade recommendations for your team? They stay in this chat and aren't added to the report." Don't run step 8 until the owner asks.
+
+### 8. Roster moves (only when the owner asks)
+
+This advice is **private to the owner**. Never put it in `adjustments.json`, `league_notes`, `report.html`, or any Artifact, and don't republish the report because of it.
+
+1. **The analysis must be finished first.** `moves` refuses to run unless `report` has been run this week with merged research. If it prints "Run the weekly analysis first", do steps 1–6 (asking only what you need), then come back.
+2. **Find the owner's team.** If step 1 started from a username, pass `--owner <username>`. Otherwise ask with AskUserQuestion, using team names and owners from the grade table as options, and pass `--roster <roster_id>`.
+3. **Run it:**
+   ```bash
+   uv run ".../scripts/scout.py" moves <league_id> --owner <username>   # or --roster <id>
+   ```
+   It writes `moves.json` next to `analysis.json` and prints drop candidates, waiver claims (each with the player to drop, week and ROS gain, and a FAAB bid range in FAAB leagues), and trade ideas (both teams' ROS gains; each one already passes a fairness check for the other owner). Read `references/moves.md` for the fields and for how to word bids and trade pitches.
+4. **News check.** Web-search the top ~5 targets, which are the best waiver adds and the players you'd get in the best trades. Confirm health, role and any news since the analysis. Drop any target with disqualifying news (for example a new injury, or lost the starting job), and cite a source for each one you keep. Free agents had no research pass, so this check matters most for them.
+5. **Reply in chat only**, short and ranked:
+   - **Drops:** `must_drop` players first, then the lowest-value players. Suggest IR instead of dropping when a player is tagged `ir_instead`.
+   - **Waiver claims:** add / drop, the ROS gain, the bid range (FAAB) or whether to use waiver priority, and one line on why.
+   - **Trades:** up to 3–4 proposals with the partner team, give / get, why it helps you, and a one-sentence pitch for why the other owner gains.
+   - Include the engine's `notes` (trade deadline passed, dynasty value not modelled, locked players).
 
 ## Notes
 

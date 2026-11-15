@@ -158,6 +158,8 @@ def scoring_summary(lg: dict) -> dict:
         "playoff_teams": int(st.get("playoff_teams") or 0),
         "trade_deadline": int(st.get("trade_deadline") or 0),
         "waiver": {0: "Rolling waivers", 1: "Reverse standings", 2: "FAAB"}.get(int(st.get("waiver_type") or 0), "Waivers"),
+        "waiver_type": int(st.get("waiver_type") or 0),
+        "waiver_budget": int(st.get("waiver_budget") or 0),
     }
 
 
