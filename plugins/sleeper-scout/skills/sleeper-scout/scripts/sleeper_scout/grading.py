@@ -99,6 +99,30 @@ def lineup_with_locks(points: dict, locked_points: dict, locked: set, positions:
     return total, lineup, 0.0
 
 
+def _week_pts(pr: dict, w) -> float:
+    rbw = pr.get("ros_by_week") or {}
+    return rbw.get(w, rbw.get(str(w), 0.0))  # keys are strings after a JSON round trip
+
+
+def team_value(pids, reserve, profiles: dict, positions: dict, slots: list[str], slot_starters: list,
+               weeks: list[int], sport: str):
+    """Week and rest-of-season score for one roster, the way the engine grades teams.
+
+    pids: active roster (taxi excluded); reserve: players on IR (no current-week value, but they
+    count in later weeks so a return from IR is valued); profiles: {pid: profile} with week_pts,
+    week_pts_locked, locked and ros_by_week. The current week of ROS equals the week score.
+    Returns (week_score, ros_score, week_lineup, locked_base)."""
+    reserve = set(reserve or ())
+    wk = {p: profiles[p]["week_pts"] for p in pids if p not in reserve}
+    wk_locked = {p: profiles[p].get("week_pts_locked", 0.0) for p in wk}
+    locked = {p for p in pids if profiles[p].get("locked")}
+    week_score, lineup, base = lineup_with_locks(wk, wk_locked, locked, positions, slots, slot_starters, sport)
+    ros = week_score if weeks else 0.0
+    for w in weeks[1:]:
+        ros += optimal_lineup({p: _week_pts(profiles[p], w) for p in pids}, positions, slots)[0]
+    return week_score, round(ros, 2), lineup, base
+
+
 def benchmark_lineup(points: dict, positions: dict, slots: list[str], n_teams: int) -> float:
     """Average starting lineup if the top players were distributed evenly across n_teams."""
     used: set = set()
