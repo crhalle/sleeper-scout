@@ -72,6 +72,7 @@ The engine splits the research queue into batches, grouped by real game (NFL) or
 - **Player week projection** = 50% Sleeper projection + 50% independent baseline × matchup multiplier, then × injury availability × research adjustment.
 - **Matchup multiplier** = 50% opponent vs position + 30% similar-defense history + 20% head-to-head. Small samples are shrunk toward neutral, and the result is capped at ×0.80–×1.20.
 - **Team score** = the best legal lineup from the roster. For rest of season, that lineup is summed week by week, so byes and injuries pull on bench depth.
+- **Games already started are locked.** Once a player's game kicks off, he keeps the status set in Sleeper. A started player stays in his lineup slot, and a player who played from the bench stays there with his points not counted. Only players whose games haven't started can move into the best lineup. Finished games score actual points.
 - **Letter ladder**: F, D-, D, D+, C-, C, **C+ (average)**, B-, B, B+, A-, A, A+. Absolute moves one step per 3.5% above or below the benchmark lineup. Curved moves one step per 0.3 standard deviations within the league.
 
 ## Data and privacy

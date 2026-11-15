@@ -47,13 +47,23 @@ def _slot_order(slots: list[str]) -> list[str]:
     return sorted(slots, key=lambda s: len(SLOT_ELIGIBILITY.get(s, {s})))
 
 
-def optimal_lineup(points: dict, positions: dict, slots: list[str]) -> tuple[float, list[tuple[str, str | None, float]]]:
+def optimal_lineup(points: dict, positions: dict, slots: list[str], fixed: dict | None = None,
+                   exclude: set | None = None) -> tuple[float, list[tuple[str, str | None, float]]]:
     """Greedy fill (restrictive slots first). points: {pid: pts}; positions: {pid: set(pos)}.
-    Returns (total, [(slot, pid, pts)])."""
-    used: set = set()
+
+    fixed: {slot index: pid} players that must stay in that slot (their game has started).
+    exclude: players that can't be moved into the lineup (locked on the bench).
+    Returns (total, [(slot, pid, pts)]) in slot-fill order."""
+    fixed = fixed or {}
+    used: set = set(fixed.values()) | set(exclude or ())
     lineup = []
     ranked = sorted(points.items(), key=lambda kv: -kv[1])
-    for slot in _slot_order(slots):
+    order = sorted(range(len(slots)), key=lambda i: len(SLOT_ELIGIBILITY.get(slots[i], {slots[i]})))
+    for i in order:
+        slot = slots[i]
+        if i in fixed:
+            lineup.append((slot, fixed[i], points.get(fixed[i], 0.0)))
+            continue
         elig = SLOT_ELIGIBILITY.get(slot, {slot})
         pick = next(((pid, p) for pid, p in ranked if pid not in used and positions.get(pid, set()) & elig), None)
         if pick:

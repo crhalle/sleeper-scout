@@ -176,3 +176,15 @@ def test_ir_out_toggle_controls_eligibility():
     roster = {"players": ["a"], "reserve": ["a"]}
     assert league.roster_compliance(_league(), roster, pdb) == []
     assert league.roster_compliance(_league(reserve_allow_out=0), roster, pdb)[0]["rule"] == "ir_eligibility"
+
+
+def test_started_players_keep_their_lineup_status():
+    pts = {"qb": 30, "rbA": 5, "rbB": 25, "rbC": 12}
+    pos = {"qb": {"QB"}, "rbA": {"RB"}, "rbB": {"RB"}, "rbC": {"RB"}}
+    slots = ["QB", "RB"]
+    # rbA started (game kicked off) and rbB played from the bench: neither can move
+    total, lineup = grading.optimal_lineup(pts, pos, slots, fixed={1: "rbA"}, exclude={"rbA", "rbB"})
+    assert {s: p for s, p, _ in lineup} == {"QB": "qb", "RB": "rbA"} and total == 35
+    # a locked bench player is never pulled in, even into an open slot
+    total, lineup = grading.optimal_lineup(pts, pos, slots, exclude={"rbB"})
+    assert {s: p for s, p, _ in lineup}["RB"] == "rbC"
