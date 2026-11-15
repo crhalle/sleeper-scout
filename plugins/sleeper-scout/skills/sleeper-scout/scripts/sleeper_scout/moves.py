@@ -12,7 +12,8 @@ from __future__ import annotations
 import statistics
 from itertools import combinations
 
-from .grading import team_value
+from .grading import optimal_lineup, team_value, _week_pts
+from .league import starting_slots
 
 WAIVER_DROP_POOL = 5     # lowest-value droppable players each waiver add is paired with
 TRADE_SINGLES = 12       # top players per side considered for 1-for-1 trades
@@ -61,12 +62,12 @@ def robust_weeks(pr: dict, current_week: int) -> tuple[dict, list[dict]]:
 class Ctx:
     """Scoring context shared by every roster evaluation."""
 
-    def __init__(self, analysis: dict):
+    def __init__(self, analysis: dict, now_rostered: set | None = None):
         L = analysis["league"]
         self.sport = L["sport"]
         self.week = L["week"]
         self.weeks = [int(w) for w in analysis.get("weeks") or range(L["week"], L["last_week"] + 1)]
-        self.slots = [s for s in L.get("roster_positions") or [] if s not in {"BN", "IR", "TAXI", "RESERVE"}]
+        self.slots = starting_slots(L)  # the engine's own slot list, so moves and grades can't drift
         self.rules = L.get("roster_rules") or {}
         self.P, self.outliers = {}, []
         for pid, pr in {**(analysis.get("free_agents") or {}), **analysis["players"]}.items():
@@ -78,15 +79,28 @@ class Ctx:
         self.pos = {pid: set(pr.get("positions") or [pr.get("pos")]) for pid, pr in self.P.items()}
         self.replacement: dict = {}
         for pid in analysis.get("free_agents") or {}:
+            if now_rostered and pid in now_rostered:
+                continue  # claimed since the analysis: no longer the replacement level
             pr = self.P[pid]
             k = pr.get("pos")
             self.replacement[k] = max(self.replacement.get(k, 0.0), pr.get("ros_pts") or 0.0)
 
     def value(self, team: dict, pids, weeks=None) -> tuple[float, float]:
+        """(first-week score, ROS score) over weeks (default: all). team_value treats its first week
+        as the current one (week_pts, lineup locks), so a span starting later is scored week by week
+        with free lineups; its first value is then that week's score, not this week's."""
         pids = [p for p in pids if p in self.P]
-        w, ros, _, _ = team_value(pids, team.get("reserve") or [], self.P, self.pos, self.slots,
-                                  team.get("slot_starters") or [], weeks or self.weeks, self.sport)
-        return w, ros
+        weeks = weeks or self.weeks
+        if int(weeks[0]) == self.week:
+            w, ros, _, _ = team_value(pids, team.get("reserve") or [], self.P, self.pos, self.slots,
+                                      team.get("slot_starters") or [], weeks, self.sport)
+            return w, ros
+        per = [optimal_lineup({p: _week_pts(self.P[p], w) for p in pids}, self.pos, self.slots)[0] for w in weeks]
+        return round(per[0], 2), round(sum(per), 2)
+
+    def later_weeks(self) -> list[int] | None:
+        """Weeks after the current one, or None when this is the last week."""
+        return self.weeks[1:] or None
 
     def locked(self, pid) -> bool:
         return bool(self.P.get(pid, {}).get("locked"))
@@ -128,6 +142,15 @@ def _brief(ctx: Ctx, pid) -> dict:
             "status": inj.get("status"), "week_pts": pr.get("week_pts"), "ros_pts": pr.get("ros_pts")}
 
 
+def ir_movable(ctx: Ctx, team: dict) -> list[str]:
+    """Active players who could go to a free IR slot instead of being dropped."""
+    if (ctx.rules.get("ir_slots") or 0) - len(team.get("reserve") or []) <= 0:
+        return []
+    ok = {s.lower() for s in ctx.rules.get("ir_statuses") or []}
+    return [p for p in _active(team) if p in ctx.P and ctx.droppable(p)
+            and ((ctx.P[p].get("injury") or {}).get("status") or "").lower() in ok]
+
+
 def marginals(ctx: Ctx, team: dict, base=None) -> dict:
     """{pid: (week_loss, ros_loss)} from removing each active player."""
     base = base or ctx.value(team, team["players"])
@@ -141,8 +164,7 @@ def marginals(ctx: Ctx, team: dict, base=None) -> dict:
 # ------------------------------------------------------------------ drops
 
 def drop_candidates(ctx: Ctx, team: dict, marg: dict) -> list[dict]:
-    ir_ok = {s.lower() for s in ctx.rules.get("ir_statuses") or []}
-    ir_free = (ctx.rules.get("ir_slots") or 0) - len(team.get("reserve") or [])
+    to_ir = set(ir_movable(ctx, team))
     issues = {i["rule"]: i for i in team.get("compliance") or []}
     order = sorted((p for p in marg if ctx.droppable(p)), key=lambda p: (marg[p][1], marg[p][0]))
 
@@ -158,11 +180,10 @@ def drop_candidates(ctx: Ctx, team: dict, marg: dict) -> list[dict]:
 
     out = []
     for p in order:
-        status = ((ctx.P[p].get("injury") or {}).get("status") or "").lower()
         tags = []
         if p in must:
             tags.append("must_drop")
-        if ir_free > 0 and status and status in ir_ok:
+        if p in to_ir:
             tags.append("ir_instead")  # move him to IR rather than dropping him
         out.append({**_brief(ctx, p), "week_loss": marg[p][0], "ros_loss": marg[p][1], "tags": tags})
     keep = [d for d in out if d["tags"]]
@@ -182,29 +203,47 @@ def faab_hint(gain_pct: float, remaining: int) -> list[int] | None:
 
 
 def waiver_claims(ctx: Ctx, team: dict, marg: dict, base, free_agents, faab_remaining: int | None) -> list[dict]:
-    pool = sorted((p for p in marg if ctx.droppable(p)), key=lambda p: marg[p][1])[:WAIVER_DROP_POOL]
-    drops: list = ([None] if _open_spots(ctx, team) > 0 else []) + pool
+    to_ir = ir_movable(ctx, team)
+    # an IR-eligible player is moved to IR rather than dropped, so he never fills the drop pool
+    pool = sorted((p for p in marg if ctx.droppable(p) and p not in to_ir), key=lambda p: marg[p][1])[:WAIVER_DROP_POOL]
+    # (drop, move to IR): an open spot, a free IR slot opened by an injured player, or a drop. Ties keep
+    # the earlier option, so nobody is cut when an open spot or an IR move gains as much.
+    options: list = ([(None, None)] if _open_spots(ctx, team) > 0 else []) + [(None, p) for p in to_ir] \
+        + [(d, None) for d in pool]
+    later = ctx.later_weeks()
+    base_later = ctx.value(team, team["players"], later) if later else None
     best: dict = {}
     for fa in free_agents:
         if fa not in ctx.P or fa in team["players"]:
             continue
-        for d in drops:
+        # NFL: once his game has kicked off he sits on waivers until they clear, so the claim only
+        # helps from next week (Sleeper processes it after this week's games)
+        after_lock = ctx.sport == "nfl" and ctx.locked(fa)
+        if after_lock and not later:
+            continue
+        for d, ir in options:
+            t = {**team, "reserve": list(team.get("reserve") or []) + [ir]} if ir else team
             roster = [p for p in team["players"] if p != d] + [fa]
-            if not _pos_ok(ctx, team, roster):
+            if not _pos_ok(ctx, t, roster):
                 continue
-            w, r = ctx.value(team, roster)
-            gain = (round(w - base[0], 2), round(r - base[1], 2))
-            if fa not in best or gain[1] > best[fa][1][1]:
-                best[fa] = (d, gain)
+            if after_lock:
+                w, r = ctx.value(t, roster, later)
+                gain = (0.0, round(r - base_later[1], 2))
+            else:
+                w, r = ctx.value(t, roster)
+                gain = (round(w - base[0], 2), round(r - base[1], 2))
+            if fa not in best or gain[1] > best[fa][2][1]:
+                best[fa] = (d, ir, gain, after_lock)
     floor = max(MIN_GAIN_PTS, MIN_GAIN * base[1])
     out, per_pos = [], {}
-    for fa, (d, (wg, rg)) in sorted(best.items(), key=lambda kv: -kv[1][1][1]):
+    for fa, (d, ir, (wg, rg), after_lock) in sorted(best.items(), key=lambda kv: -kv[1][2][1]):
         pos = ctx.P[fa].get("pos")
         if rg < floor or per_pos.get(pos, 0) >= WAIVERS_PER_POS:
             continue
         per_pos[pos] = per_pos.get(pos, 0) + 1
         pct = rg / base[1] if base[1] else 0.0
         out.append({"add": _brief(ctx, fa), "drop": _brief(ctx, d) if d else None,
+                    "move_to_ir": _brief(ctx, ir) if ir else None, "after_lock": after_lock,
                     "week_gain": wg, "ros_gain": rg, "ros_gain_pct": round(pct, 4),
                     "faab_bid": faab_hint(pct, faab_remaining) if faab_remaining is not None else None})
         if len(out) == MAX_WAIVERS:
@@ -225,19 +264,21 @@ def trade_window(ctx: Ctx, league: dict) -> str | None:
     return None
 
 
-def _apply(ctx: Ctx, team: dict, out_: tuple, in_: tuple, marg: dict) -> tuple[list, str | None]:
-    """Roster after a trade, with the lowest-value droppable player cut when it's over the roster
-    size. A freed spot stays empty: trades are judged without counting on a waiver pickup.
-    Returns (roster, dropped pid or None)."""
+def _apply(ctx: Ctx, team: dict, out_: tuple, in_: tuple, marg: dict) -> tuple[list, list] | None:
+    """Roster after a trade, with the lowest-value droppable players cut while it's over the
+    roster size. A freed spot stays empty: trades are judged without counting on a waiver pickup.
+    Returns (roster, dropped pids), or None when not enough players can be cut to make it legal."""
     roster = [p for p in team["players"] if p not in out_] + list(in_)
     over = len([p for p in roster if p not in set(team.get("reserve") or [])]) - (ctx.rules.get("roster_spots") or 10**6)
-    dropped = None
+    dropped: list = []
     if over > 0:
         cands = sorted((p for p in roster if p not in in_ and p in marg and ctx.droppable(p)),
                        key=lambda p: marg[p][1])
+        if len(cands) < over:
+            return None
         for p in cands[:over]:
             roster.remove(p)
-            dropped = p
+            dropped.append(p)
     return roster, dropped
 
 
@@ -260,6 +301,16 @@ def trade_ideas(ctx: Ctx, me: dict, teams: list[dict], margs: dict, bases: dict)
         singles = [(p,) for p in top(t, TRADE_SINGLES)]
         return singles, singles + list(combinations(top(t, TRADE_PACKAGE), 2))
 
+    later = ctx.later_weeks()
+    later_base: dict = {}
+
+    def base_for(t, weeks):
+        if weeks is ctx.weeks:
+            return bases[t["roster_id"]]
+        if t["roster_id"] not in later_base:
+            later_base[t["roster_id"]] = ctx.value(t, t["players"], weeks)
+        return later_base[t["roster_id"]]
+
     my_singles, my_all = packages(me)
     my_floor = max(MIN_GAIN_PTS, MIN_GAIN * bases[me["roster_id"]][1])
     ideas = []
@@ -276,14 +327,18 @@ def trade_ideas(ctx: Ctx, me: dict, teams: list[dict], margs: dict, bases: dict)
                 if _market(ctx, get) > _market(ctx, give) * (1 + MARKET_SLACK):
                     continue  # they'd be giving up clearly more player value than they get
                 weeks = ctx.weeks
-                if any(ctx.locked(p) for p in give + get) and len(ctx.weeks) > 1:
-                    weeks = ctx.weeks[1:]  # NBA: value from next week when a traded player has played
-                mine, my_drop = _apply(ctx, me, give, get, margs[me["roster_id"]])
-                theirs, their_drop = _apply(ctx, t, get, give, margs[t["roster_id"]])
+                if any(ctx.locked(p) for p in give + get):
+                    if not later:
+                        continue
+                    weeks = later  # NBA: value from next week when a traded player has played
+                a_me = _apply(ctx, me, give, get, margs[me["roster_id"]])
+                a_t = _apply(ctx, t, get, give, margs[t["roster_id"]])
+                if a_me is None or a_t is None:
+                    continue
+                (mine, my_drops), (theirs, their_drops) = a_me, a_t
                 if not _pos_ok(ctx, me, mine) or not _pos_ok(ctx, t, theirs):
                     continue
-                mb = ctx.value(me, me["players"], weeks) if weeks is not ctx.weeks else bases[me["roster_id"]]
-                tb = ctx.value(t, t["players"], weeks) if weeks is not ctx.weeks else bases[t["roster_id"]]
+                mb, tb = base_for(me, weeks), base_for(t, weeks)
                 mw, mr = ctx.value(me, mine, weeks)
                 tw, tr = ctx.value(t, theirs, weeks)
                 my_gain, their_gain = round(mr - mb[1], 2), round(tr - tb[1], 2)
@@ -292,10 +347,13 @@ def trade_ideas(ctx: Ctx, me: dict, teams: list[dict], margs: dict, bases: dict)
                 found.append({
                     "partner": {"roster_id": t["roster_id"], "team_name": t["team_name"], "owner": t["owner"]},
                     "give": [_brief(ctx, p) for p in give], "get": [_brief(ctx, p) for p in get],
+                    # from_week: the first week counted (next week when a traded player already played);
+                    # the *_gain_week values are for that week
+                    "from_week": int(weeks[0]),
                     "my_gain_ros": my_gain, "my_gain_week": round(mw - mb[0], 2),
                     "their_gain_ros": their_gain, "their_gain_week": round(tw - tb[0], 2),
-                    "my_drop": _brief(ctx, my_drop) if my_drop else None,
-                    "their_drop": _brief(ctx, their_drop) if their_drop else None,
+                    "my_drops": [_brief(ctx, p) for p in my_drops],
+                    "their_drops": [_brief(ctx, p) for p in their_drops],
                     "_rank": (min(my_gain, their_gain + tol), my_gain),
                 })
         found.sort(key=lambda x: x["_rank"], reverse=True)
@@ -330,7 +388,7 @@ def find_team(analysis: dict, roster_id: int | None = None, user_id: str | None 
 def recommend(analysis: dict, roster_id: int, now_rostered: set | None = None) -> dict:
     """Drops, waiver claims and trade ideas for one roster. now_rostered (optional): every player
     rostered in the league right now, so free agents claimed since the analysis are skipped."""
-    ctx = Ctx(analysis)
+    ctx = Ctx(analysis, now_rostered)
     L = analysis["league"]
     me = find_team(analysis, roster_id=roster_id)
     free_agents = [p for p in (analysis.get("free_agents") or {}) if not now_rostered or p not in now_rostered]
@@ -357,9 +415,9 @@ def recommend(analysis: dict, roster_id: int, now_rostered: set | None = None) -
     trades = [] if closed else trade_ideas(ctx, me, analysis["teams"], margs, bases)
     shown = {d["pid"] for d in drops} | set(me["players"])
     for w in waivers:
-        shown |= {x["pid"] for x in (w["add"], w["drop"]) if x}
+        shown |= {x["pid"] for x in (w["add"], w["drop"], w["move_to_ir"]) if x}
     for t in trades:
-        shown |= {x["pid"] for x in t["give"] + t["get"] + [t["my_drop"], t["their_drop"]] if x}
+        shown |= {x["pid"] for x in t["give"] + t["get"] + t["my_drops"] + t["their_drops"]}
     for o in ctx.outliers:
         if o["pid"] in shown:
             notes.append(f"Capped {o['name']}'s week {o['week']} projection ({o['raw']:.1f} -> {o['capped']:.1f}): "

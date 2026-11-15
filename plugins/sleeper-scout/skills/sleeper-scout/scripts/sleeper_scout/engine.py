@@ -350,6 +350,7 @@ def run(league_id: str, adjustments: dict | None = None, history_seasons: int = 
             "locked_points": locked_base,  # NBA: points already banked by current starters' started games
             "starters": starters,
             "players": pids,
+            "roster_all": sorted({str(x) for x in r.get("players") or []} - taxi),  # incl. unprojected players
             "reserve": sorted(reserve & set(pids)),
             "taxi": sorted(taxi),
             "matchup_id": mid_by_roster.get(rid),

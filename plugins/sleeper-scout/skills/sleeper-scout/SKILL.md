@@ -107,7 +107,7 @@ This advice is **private to the owner**. Never put it in `adjustments.json`, `le
 4. **News check.** Web-search the top ~5 targets, which are the best waiver adds and the players you'd get in the best trades. Confirm health, role and any news since the analysis. Drop any target with disqualifying news (for example a new injury, or lost the starting job), and cite a source for each one you keep. Free agents had no research pass, so this check matters most for them.
 5. **Reply in chat only**, short and ranked:
    - **Drops:** `must_drop` players first, then the lowest-value players. Suggest IR instead of dropping when a player is tagged `ir_instead`.
-   - **Waiver claims:** add / drop, the ROS gain, the bid range (FAAB) or whether to use waiver priority, and one line on why.
+   - **Waiver claims:** add / drop (or "move X to IR" when `move_to_ir` is set), the ROS gain, the bid range (FAAB) or whether to use waiver priority, and one line on why. For `after_lock` adds, say the claim processes after this week's games.
    - **Trades:** up to 3–4 proposals with the partner team, give / get, why it helps you, and a one-sentence pitch for why the other owner gains.
    - Include the engine's `notes` (trade deadline passed, dynasty value not modelled, locked players, and any capped projection outlier for a player in a recommended move).
 

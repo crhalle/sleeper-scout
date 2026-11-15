@@ -114,7 +114,7 @@ def test_two_for_one_forces_receiver_to_drop():
     ctx = moves.Ctx(a)
     marg = moves.marginals(ctx, teams[1])
     roster, dropped = moves._apply(ctx, teams[1], ("r2b",), ("w1", "w1b"), marg)
-    assert len(roster) == 4 and dropped == "w2"
+    assert len(roster) == 4 and dropped == ["w2"]
 
 
 def test_partner_never_gives_up_a_star_for_a_bench_upgrade():
@@ -211,3 +211,62 @@ def test_outlier_kicker_no_longer_blocks_a_better_waiver_kicker():
     assert res["waivers"] and res["waivers"][0]["add"]["pid"] == "kfa" and res["waivers"][0]["drop"]["pid"] == "ka"
     assert res["outliers"][0]["pid"] == "ka" and any("Capped KA" in n for n in res["notes"])
     assert a["players"]["ka"]["ros_by_week"]["15"] == 41.5
+
+
+# ------------------------------------------------------------------ review fixes
+
+def test_span_without_current_week_uses_that_weeks_projection_not_this_weeks():
+    a = _base_league()
+    a["players"]["ra"]["week_pts"] = 100  # this week's points must not leak into a next-week valuation
+    ctx = moves.Ctx(a)
+    team = a["teams"][0]
+    w, ros = ctx.value(team, team["players"], [11, 12])
+    assert w == 20 + 15 + 14 and ros == 2 * (20 + 15 + 14)
+
+
+def test_gate_rejects_preseason_or_other_season_and_accepts_defense_only_research():
+    a = _base_league()
+    a["league"]["in_season"] = False
+    assert "before the season" in scout.moves_gate(a, 10, {"season_type": "regular", "season": "2026"})
+    a["league"]["in_season"] = True
+    assert "season" in scout.moves_gate(a, 10, {"season_type": "regular", "season": "2027"})
+    a["adjustments"] = {"players": {}, "defenses": {"KC": {"note": "x"}}}
+    assert scout.moves_gate(a, 10, {"season_type": "regular", "season": "2026"}) is None
+
+
+def test_locked_nfl_free_agent_is_valued_from_next_week():
+    fa = [_p("wfa", "WR", 25, locked=True, rostered=False)]
+    res = moves.recommend(_base_league(free_agents=fa), 1)
+    top = res["waivers"][0]
+    assert top["add"]["pid"] == "wfa" and top["after_lock"] and top["week_gain"] == 0
+    assert top["ros_gain"] == (25 - 14) * 2  # weeks 11-12 only
+
+
+def test_ir_eligible_player_goes_to_ir_instead_of_being_dropped_for_a_claim():
+    fa = [_p("wfa", "WR", 25, rostered=False)]
+    a = _base_league(free_agents=fa)
+    a["players"]["rb2"]["injury"] = {"status": "Out"}
+    res = moves.recommend(a, 1)
+    top = res["waivers"][0]
+    assert top["add"]["pid"] == "wfa" and top["drop"] is None and top["move_to_ir"]["pid"] == "rb2"
+
+
+def test_trade_needing_more_cuts_than_possible_is_skipped_and_all_cuts_listed():
+    players = [_p("q1", "QB", 20), _p("r1", "RB", 10), _p("w1", "WR", 9), _p("w1b", "WR", 8),
+               _p("q2", "QB", 18), _p("r2", "RB", 30), _p("r2b", "RB", 25), _p("w2", "WR", 2)]
+    teams = [_team(1, ["q1", "r1", "w1", "w1b"]), _team(2, ["q2", "r2", "r2b", "w2"])]
+    a = _analysis(players, teams, spots=3)  # team 2 already one over, so a 2-for-1 needs two cuts
+    ctx = moves.Ctx(a)
+    marg = moves.marginals(ctx, teams[1])
+    roster, dropped = moves._apply(ctx, teams[1], ("r2b",), ("w1", "w1b"), marg)
+    assert len(roster) == 3 and len(dropped) == 2
+    for p in ("q2", "r2", "w2"):
+        a["players"][p]["locked"] = True  # nobody left who can be cut
+    assert moves._apply(moves.Ctx(a), teams[1], ("r2b",), ("w1", "w1b"), marg) is None
+
+
+def test_replacement_level_ignores_free_agents_claimed_since_analysis():
+    fa = [_p("wfa", "WR", 25, rostered=False), _p("wfb", "WR", 5, rostered=False)]
+    a = _base_league(free_agents=fa)
+    assert moves.Ctx(a).replacement["WR"] == 75
+    assert moves.Ctx(a, now_rostered={"wfa"}).replacement["WR"] == 15

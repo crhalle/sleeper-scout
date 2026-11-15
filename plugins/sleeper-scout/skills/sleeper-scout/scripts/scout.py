@@ -165,16 +165,22 @@ GATE_MSG = ("Roster moves need this week's finished league analysis. Run the wee
             "(`/sleeper-scout:scout`: analyze, research, merge-research, report), then ask again.")
 
 
-def moves_gate(analysis: dict, current_week: int | None) -> str | None:
+def moves_gate(analysis: dict, current_week: int | None, state: dict | None = None) -> str | None:
     """Why roster moves aren't available yet, or None. They need the researched analysis
-    (report run with merged adjustments) for the current week."""
+    (report run with merged adjustments) for Sleeper's current season and week. state: Sleeper's
+    /state (season, season_type) when available."""
     adj = analysis.get("adjustments") or {}
-    if not (adj.get("players") or adj.get("league_notes")):
+    if not (adj.get("players") or adj.get("defenses") or adj.get("league_notes")):
         return GATE_MSG + " (No research adjustments in analysis.json: `report` hasn't been run with them.)"
     if "free_agents" not in analysis:
         return GATE_MSG + " (analysis.json predates roster-move support.)"
     L = analysis["league"]
-    if L.get("in_season") and current_week is not None and int(L["week"]) != int(current_week):
+    state = state or {}
+    if state.get("season") and str(state["season"]) != str(L.get("season")):
+        return GATE_MSG + f" (The analysis is for the {L.get('season')} season; Sleeper is on {state['season']}.)"
+    if state.get("season_type") == "regular" and not L.get("in_season"):
+        return GATE_MSG + " (The analysis was made before the season started.)"
+    if current_week is not None and int(L["week"]) != int(current_week):
         return GATE_MSG + f" (The analysis is for week {L['week']}; Sleeper is now on week {current_week}.)"
     return None
 
@@ -196,18 +202,22 @@ def _print_moves(m: dict) -> None:
     print("\n## Waiver claims (add | drop | week gain | ROS gain | FAAB bid)")
     for w in m["waivers"] or []:
         bid = f"${w['faab_bid'][0]}-{w['faab_bid'][1]}" if w.get("faab_bid") else "-"
-        drop = nm(w["drop"]) if w["drop"] else "(open spot)"
-        print(f"{w['add']['pid']} {nm(w['add'])} | {drop} | {w['week_gain']:+.1f} | {w['ros_gain']:+.1f} "
+        drop = nm(w["drop"]) if w["drop"] else (f"(move {nm(w['move_to_ir'])} to IR)" if w.get("move_to_ir")
+                                                else "(open spot)")
+        when = " (on waivers: from next week)" if w.get("after_lock") else ""
+        print(f"{w['add']['pid']} {nm(w['add'])}{when} | {drop} | {w['week_gain']:+.1f} | {w['ros_gain']:+.1f} "
               f"({w['ros_gain_pct']:.1%}) | {bid}")
     if not m["waivers"]:
         print("(no free agent improves this roster)")
     print("\n## Trade ideas (partner | you give | you get | your ROS gain | their ROS gain)")
     for t in m["trades"]:
         extra = []
-        if t["my_drop"]:
-            extra.append(f"you drop {nm(t['my_drop'])}")
-        if t["their_drop"]:
-            extra.append(f"they drop {nm(t['their_drop'])}")
+        if t["my_drops"]:
+            extra.append(f"you drop {', '.join(nm(p) for p in t['my_drops'])}")
+        if t["their_drops"]:
+            extra.append(f"they drop {', '.join(nm(p) for p in t['their_drops'])}")
+        if t["from_week"] != L["week"]:
+            extra.append(f"valued from week {t['from_week']}")
         print(f"{t['partner']['team_name']} ({t['partner']['owner']}) | {', '.join(nm(p) for p in t['give'])} | "
               f"{', '.join(nm(p) for p in t['get'])} | {t['my_gain_ros']:+.1f} (week {t['my_gain_week']:+.1f}) | "
               f"{t['their_gain_ros']:+.1f}" + (f" | {'; '.join(extra)}" if extra else ""))
@@ -223,11 +233,11 @@ def cmd_moves(a):
     analysis, out = _load_analysis(a, missing=GATE_MSG)
     L = analysis["league"]
     try:
-        st = api.state(L["sport"])
+        st = api.state(L["sport"]) or {}
         current = max(1, int(st.get("display_week") or st.get("week") or 1))
     except Exception:
-        current = None
-    why = moves_gate(analysis, current)
+        st, current = {}, None
+    why = moves_gate(analysis, current, st)
     if why:
         raise SystemExit(why)
     user_id = None
@@ -244,8 +254,9 @@ def cmd_moves(a):
         mine = next((r for r in rosters if r["roster_id"] == team["roster_id"]), None)
         if mine is not None:
             cur = {str(p) for p in mine.get("players") or []} - set(map(str, mine.get("taxi") or []))
-            before = set(team["players"])
-            if before - cur or (cur - before) & (set(analysis["players"]) | set(analysis["free_agents"])):
+            # roster_all: every non-taxi player at analysis time, including ones with no projection
+            before = set(team.get("roster_all") or team["players"])
+            if cur != before:
                 print("! Your roster changed since the analysis ran; re-run `report` for exact numbers.")
     except Exception:
         pass
